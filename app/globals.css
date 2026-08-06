@@ -145,7 +145,7 @@ kbd { display: inline-grid; place-items: center; min-width: 28px; height: 25px; 
   .touch-stick-guide::before, .touch-stick-guide::after { content: ""; position: absolute; inset: 50% auto auto 50%; background: rgba(192,255,240,.14); transform: translate(-50%, -50%); }
   .touch-stick-guide::before { width: 66px; height: 1px; }.touch-stick-guide::after { width: 1px; height: 66px; }
   .touch-stick-knob { position: absolute; width: 48px; height: 48px; border: 1px solid rgba(224,255,247,.58); border-radius: 50%; background: radial-gradient(circle at 38% 32%, rgba(186,255,236,.86), rgba(53,171,172,.92) 38%, rgba(8,79,94,.96)); box-shadow: 0 4px 13px rgba(0,11,25,.48), inset 0 1px 4px rgba(255,255,255,.38); transform: translate(-50%, -50%); transition: left 55ms linear, top 55ms linear; }
-  .touch-burst { width: 68px; height: 68px; font: 700 .55rem var(--font-mono), monospace; }.touch-action { width: 50px; height: 50px; font-weight: 900; }
+  .touch-burst { width: 68px; height: 68px; font: 700 .55rem var(--font-mono), monospace; }.touch-action { width: 64px; height: 64px; margin-bottom: 12px; font-size: 1.05rem; font-weight: 900; }
   .wide-overlay { padding: 22px 14px; }.home-heading { margin-top: 0; }.home-heading h2 { font-size: 2rem; }.home-grid, .talent-grid { grid-template-columns: 1fr; }.upgrade-card { grid-row: auto; }.home-actions { margin-bottom: 12px; flex-wrap: wrap; }.reef-card { padding: 14px; }
   .result-grid { grid-template-columns: 1fr 1fr; }.title-screen h1 span { font-size: 4.4rem; }
 }
