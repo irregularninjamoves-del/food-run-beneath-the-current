@@ -15,6 +15,7 @@ import {
 import { loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
 import { gameAudio } from "./audio";
+import { ENEMY_ARCHETYPES, EnemyKind, TIER_COLORS } from "./enemies";
 
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; size: number; kind: "bubble" | "spark" };
 
@@ -67,6 +68,7 @@ interface UiSnapshot {
   stamina: number;
   hidden: boolean;
   stealth: string;
+  threat: string;
   bagUsed: number;
   bagCapacity: number;
   run: RunStats;
@@ -189,45 +191,80 @@ function drawFish(ctx: CanvasRenderingContext2D, x: number, y: number, facing: n
   ctx.restore();
 }
 
-function drawShark(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, state: string, alert: number) {
+function drawPredator(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, state: string, alert: number, kind: EnemyKind) {
+  const enemy = ENEMY_ARCHETYPES[kind];
   ctx.save();
   ctx.translate(x, y);
-  ctx.scale(facing, 1);
-  ctx.fillStyle = state === "CHASE" ? "#7e91ad" : "#6783a0";
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 48, 21, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-39, 0);
-  ctx.lineTo(-69, -25);
-  ctx.lineTo(-63, 24);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-6, -17);
-  ctx.lineTo(8, -42);
-  ctx.lineTo(17, -15);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#d6e2e8";
-  ctx.beginPath();
-  ctx.ellipse(15, 8, 30, 10, -0.04, 0, Math.PI);
-  ctx.fill();
-  ctx.fillStyle = state === "CHASE" ? "#ff506c" : "#0e2338";
-  ctx.beginPath();
-  ctx.arc(27, -6, 3.2, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.scale(facing * enemy.scale, enemy.scale);
+  if (kind === "needlefish") {
+    ctx.fillStyle = state === "CHASE" ? "#c79b51" : "#769da0";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 45, 11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(35, -3);
+    ctx.lineTo(72, 0);
+    ctx.lineTo(35, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-37, 0);
+    ctx.lineTo(-57, -15);
+    ctx.lineTo(-54, 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#11283c";
+    ctx.beginPath();
+    ctx.arc(25, -3, 3, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = kind === "ancient-shark" ? (state === "CHASE" ? "#625477" : "#41566d") : state === "CHASE" ? "#7e91ad" : "#6783a0";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 48, 21, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-39, 0);
+    ctx.lineTo(-69, -25);
+    ctx.lineTo(-63, 24);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-6, -17);
+    ctx.lineTo(8, -42);
+    ctx.lineTo(17, -15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = kind === "ancient-shark" ? "#aebcc4" : "#d6e2e8";
+    ctx.beginPath();
+    ctx.ellipse(15, 8, 30, 10, -0.04, 0, Math.PI);
+    ctx.fill();
+    if (kind === "ancient-shark") {
+      ctx.strokeStyle = "rgba(218,226,225,.7)";
+      ctx.lineWidth = 2;
+      for (let scar = 0; scar < 3; scar++) {
+        ctx.beginPath();
+        ctx.moveTo(2 + scar * 7, -15);
+        ctx.lineTo(-5 + scar * 7, 3);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = state === "CHASE" ? "#ff506c" : "#0e2338";
+    ctx.beginPath();
+    ctx.arc(27, -6, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
-  const label = state === "PATROL" ? "" : state;
+  const label = state === "PATROL" && enemy.tier !== "boss" ? "" : `${enemy.tier.toUpperCase()} · ${state}`;
   if (label) {
     ctx.font = "700 10px var(--font-mono), monospace";
     ctx.textAlign = "center";
-    ctx.fillStyle = state === "CHASE" ? "#ff8092" : "#ffe784";
-    ctx.fillText(label, x, y - 38);
+    ctx.fillStyle = state === "CHASE" ? "#ff8092" : TIER_COLORS[enemy.tier];
+    const labelY = y - 32 - enemy.scale * 15;
+    ctx.fillText(label, x, labelY);
     ctx.fillStyle = "rgba(255,255,255,.18)";
-    ctx.fillRect(x - 25, y - 31, 50, 3);
+    ctx.fillRect(x - 25, labelY + 7, 50, 3);
     ctx.fillStyle = state === "CHASE" ? "#ff5575" : "#f8d45b";
-    ctx.fillRect(x - 25, y - 31, 50 * clamp(alert, 0, 1), 3);
+    ctx.fillRect(x - 25, labelY + 7, 50 * clamp(alert, 0, 1), 3);
   }
 }
 
@@ -339,7 +376,7 @@ export default function FoodRunGame() {
     const save = STARTER_SAVE;
     return {
       phase: "title", paused: false, inventory: false, health: 3, stamina: 100, hidden: false,
-      stealth: "CLEAR", bagUsed: 0, bagCapacity: getBagCapacity(save), run: emptyRun(), save,
+      stealth: "CLEAR", threat: "NO CONTACT", bagUsed: 0, bagCapacity: getBagCapacity(save), run: emptyRun(), save,
       tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", nearHome: true,
       nearCover: false, nearWhale: false, resultXp: 0, levelGained: false,
     };
@@ -347,8 +384,15 @@ export default function FoodRunGame() {
 
   const syncUi = useCallback((g: Runtime) => {
     let stealth = g.player.hidden ? "HIDDEN" : "CLEAR";
+    let closestThreat = Number.POSITIVE_INFINITY;
+    let threat = "NO CONTACT";
     for (const chunk of g.chunks.active()) {
       for (const shark of chunk.sharks) {
+        const threatDistance = distance(g.player.x, g.player.y, shark.x, shark.y);
+        if (threatDistance < closestThreat && threatDistance < 900) {
+          closestThreat = threatDistance;
+          threat = `${shark.tier.toUpperCase()} · ${Math.round(threatDistance / 10)}m`;
+        }
         if (shark.state === "CHASE") stealth = "DETECTED";
         else if (stealth === "CLEAR" && !["PATROL", "RETURN"].includes(shark.state)) stealth = "SUSPICIOUS";
       }
@@ -364,6 +408,7 @@ export default function FoodRunGame() {
       stamina: g.player.stamina,
       hidden: g.player.hidden,
       stealth,
+      threat,
       bagUsed: g.bagUsed,
       bagCapacity: getBagCapacity(g.save),
       run: { ...g.run },
@@ -593,11 +638,11 @@ export default function FoodRunGame() {
           else {
             g.scannerCooldown = 8;
             g.scannerPulse = 1;
-            showNotice(g, "Sonar pulse — useful, but noisy.", 1.8);
+            showNotice(g, "Sonar: solid ring is sight; dashed ring is hearing. Your pulse is noisy.", 2.5);
             audioCue("sonar", g.save.settings.sound);
             for (const chunk of g.chunks.active()) {
               for (const shark of chunk.sharks) {
-                if (Math.abs(shark.x - g.player.x) < 500 && shark.state === "PATROL") {
+                if (Math.abs(shark.x - g.player.x) < ENEMY_ARCHETYPES[shark.kind].sonarRadius && shark.state === "PATROL") {
                   shark.state = "SUSPICIOUS";
                   shark.lastKnownX = g.player.x;
                   shark.lastKnownY = g.player.y;
@@ -693,6 +738,7 @@ export default function FoodRunGame() {
         }
 
         for (const shark of chunk.sharks) {
+          const enemy = ENEMY_ARCHETYPES[shark.kind];
           shark.stateTime += dt;
           shark.attackCooldown = Math.max(0, shark.attackCooldown - dt);
           const dx = g.player.x - shark.x;
@@ -700,11 +746,18 @@ export default function FoodRunGame() {
           const dist = Math.hypot(dx, dy);
           const playerSpeed = Math.hypot(g.player.vx, g.player.vy);
           const inFront = dx * shark.facing > -40;
-          const burstNoise = wantsBurst && dist < 440;
-          const sonarNoise = g.scannerPulse > 0.7 && dist < 520;
-          const sees = !g.player.hidden && dist < (playerSpeed > 180 ? 360 : 260) && (inFront || dist < 105);
+          const burstNoise = wantsBurst && dist < enemy.hearingRadius;
+          const sonarNoise = g.scannerPulse > 0.7 && dist < enemy.sonarRadius;
+          const currentVision = enemy.visionRadius * (playerSpeed > 180 ? 1.28 : 1);
+          const sees = !g.player.hidden && dist < currentVision && (inFront || dist < enemy.visionRadius * 0.38);
           const safeAtReef = g.player.x < 500;
           const detects = !safeAtReef && (sees || burstNoise || sonarNoise);
+          if (enemy.tier === "boss" && dist < 1000 && !shark.warned) {
+            shark.warned = true;
+            showNotice(g, "COLOSSAL SHADOW — its awareness reaches far. Sonar reveals the radii.", 4.2);
+            g.shake = g.save.settings.reducedMotion ? 2 : 7;
+            gameAudio.setMusic("danger", g.save.settings.music);
+          }
           if (g.decoy && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 460 && shark.state !== "CHASE") {
             shark.lastKnownX = g.decoy.x;
             shark.lastKnownY = g.decoy.y;
@@ -714,7 +767,7 @@ export default function FoodRunGame() {
           if (detects) {
             shark.lastKnownX = g.player.x;
             shark.lastKnownY = g.player.y;
-            shark.alert = Math.min(1, shark.alert + dt * (burstNoise ? 2.3 : 1.25));
+            shark.alert = Math.min(1, shark.alert + dt * (burstNoise ? enemy.alertGain * 1.85 : enemy.alertGain));
           } else shark.alert = Math.max(0, shark.alert - dt * 0.35);
 
           const steer = (tx: number, ty: number, speedValue: number) => {
@@ -727,8 +780,8 @@ export default function FoodRunGame() {
           };
 
           if (shark.state === "PATROL") {
-            shark.vx = shark.facing * 48;
-            if (Math.abs(shark.x - shark.homeX) > 170) shark.facing = shark.x > shark.homeX ? -1 : 1;
+            shark.vx = shark.facing * enemy.patrolSpeed;
+            if (Math.abs(shark.x - shark.homeX) > enemy.patrolRadius) shark.facing = shark.x > shark.homeX ? -1 : 1;
             if (shark.alert > 0.32) {
               shark.state = "SUSPICIOUS";
               shark.stateTime = 0;
@@ -746,7 +799,7 @@ export default function FoodRunGame() {
               shark.stateTime = 0;
             }
           } else if (shark.state === "INVESTIGATE") {
-            steer(shark.lastKnownX, shark.lastKnownY, 92);
+            steer(shark.lastKnownX, shark.lastKnownY, enemy.investigateSpeed);
             if (detects && shark.alert > 0.74) {
               shark.state = "CHASE";
               shark.stateTime = 0;
@@ -759,7 +812,7 @@ export default function FoodRunGame() {
           } else if (shark.state === "SEARCH") {
             const searchX = shark.lastKnownX + Math.sin(shark.stateTime * 1.7) * 110;
             const searchY = shark.lastKnownY + Math.cos(shark.stateTime * 1.2) * 70;
-            steer(searchX, searchY, 76);
+            steer(searchX, searchY, enemy.investigateSpeed * 0.82);
             if (detects && shark.alert > 0.66) {
               shark.state = "CHASE";
               shark.stateTime = 0;
@@ -774,8 +827,8 @@ export default function FoodRunGame() {
               }
             }
           } else if (shark.state === "CHASE") {
-            steer(g.player.x, g.player.y, 175);
-            if (g.player.hidden || dist > 570 || g.player.whaleShield > 0) {
+            steer(g.player.x, g.player.y, enemy.chaseSpeed);
+            if (g.player.hidden || dist > enemy.disengageRadius || g.player.whaleShield > 0) {
               if (shark.stateTime > 0.45) {
                 shark.state = "SEARCH";
                 shark.lastKnownX = g.player.x;
@@ -787,10 +840,10 @@ export default function FoodRunGame() {
                 }
               }
             }
-            if (dist < 48 && shark.attackCooldown <= 0 && g.player.invulnerable <= 0 && g.player.whaleShield <= 0) {
-              shark.attackCooldown = 1.5;
+            if (dist < enemy.attackRadius && shark.attackCooldown <= 0 && g.player.invulnerable <= 0 && g.player.whaleShield <= 0) {
+              shark.attackCooldown = enemy.tier === "boss" ? 2.2 : enemy.tier === "minion" ? 1.8 : 1.5;
               g.player.invulnerable = 1.6;
-              g.player.health -= 1;
+              g.player.health -= enemy.damage;
               g.player.vx = dx > 0 ? 190 : -190;
               g.player.vy = dy > 0 ? 100 : -100;
               g.shake = g.save.settings.reducedMotion ? 2 : 10;
@@ -817,7 +870,7 @@ export default function FoodRunGame() {
               gameAudio.setMusic("explore", g.save.settings.music);
             }
           } else if (shark.state === "RETURN") {
-            steer(shark.homeX, 280 + Math.sin(shark.homeX) * 80, 60);
+            steer(shark.homeX, 280 + Math.sin(shark.homeX) * 80, enemy.patrolSpeed * 1.2);
             if (Math.abs(shark.x - shark.homeX) < 30) {
               shark.state = "PATROL";
               shark.stateTime = 0;
@@ -945,7 +998,23 @@ export default function FoodRunGame() {
           for (const shark of chunk.sharks) {
             const x = shark.x - g.cameraX;
             if (x < -100 || x > width + 100) continue;
-            drawShark(ctx, x, shark.y, shark.facing, shark.state, shark.alert);
+            const enemy = ENEMY_ARCHETYPES[shark.kind];
+            if (g.scannerPulse > 0) {
+              const alpha = g.scannerPulse * 0.46;
+              ctx.save();
+              ctx.strokeStyle = `${TIER_COLORS[enemy.tier]}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`;
+              ctx.lineWidth = enemy.tier === "boss" ? 3 : 1.5;
+              ctx.beginPath();
+              ctx.arc(x, shark.y, enemy.visionRadius, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.setLineDash([8, 10]);
+              ctx.globalAlpha = 0.72;
+              ctx.beginPath();
+              ctx.arc(x, shark.y, enemy.hearingRadius, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
+            drawPredator(ctx, x, shark.y, shark.facing, shark.state, shark.alert, shark.kind);
           }
         }
 
@@ -1085,6 +1154,7 @@ export default function FoodRunGame() {
             <section className="hud-cluster center-cluster">
               <div className={`stealth-chip ${ui.stealth.toLowerCase()}`}><span className="status-dot" />{ui.stealth}</div>
               <div className="distance-readout">↔ {Math.round(ui.run.distance / 10)}m from reef</div>
+              <div className="threat-readout">{ui.threat}</div>
             </section>
             <section className="hud-cluster cargo-cluster">
               <div className="cargo-row"><span>FOOD</span><b className="food-color">● {ui.run.food}</b></div>

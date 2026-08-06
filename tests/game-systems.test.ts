@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { bankRunProgress, getBagCapacity, STARTER_SAVE, WORLD, xpForLevel } from "../app/game/model";
 import { ChunkManager, createChunk } from "../app/game/world";
+import { ENEMY_ARCHETYPES } from "../app/game/enemies";
 
 test("procedural chunks are deterministic for a run seed", () => {
   assert.deepEqual(createChunk(5, 424242), createChunk(5, 424242));
@@ -52,4 +53,21 @@ test("extraction banks the haul and defeat leaves permanent stores unchanged", (
   assert.equal(before.bankedFood, 0, "banking must not mutate the previous save");
   const afterDefeat = { ...before };
   assert.deepEqual(afterDefeat, before, "defeat must not bank unprotected run resources");
+});
+
+test("aggro radii scale from minion to lieutenant to boss", () => {
+  const minion = ENEMY_ARCHETYPES["needlefish"];
+  const lieutenant = ENEMY_ARCHETYPES["reef-shark"];
+  const boss = ENEMY_ARCHETYPES["ancient-shark"];
+  assert.ok(minion.visionRadius < lieutenant.visionRadius && lieutenant.visionRadius < boss.visionRadius);
+  assert.ok(minion.hearingRadius < lieutenant.hearingRadius && lieutenant.hearingRadius < boss.hearingRadius);
+  assert.ok(minion.disengageRadius < lieutenant.disengageRadius && lieutenant.disengageRadius < boss.disengageRadius);
+});
+
+test("procedural distance tiers can generate all three enemy classes", () => {
+  const tiers = new Set<string>();
+  for (let index = 0; index < 180; index += 1) {
+    for (const enemy of createChunk(index, 94017).sharks) tiers.add(enemy.tier);
+  }
+  assert.deepEqual([...tiers].sort(), ["boss", "lieutenant", "minion"]);
 });

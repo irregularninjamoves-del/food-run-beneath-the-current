@@ -1,3 +1,5 @@
+import type { EnemyKind, EnemyTier } from "./enemies";
+
 export type Phase = "title" | "home" | "playing" | "results" | "defeat";
 export type PredatorState =
   | "PATROL"
@@ -43,6 +45,9 @@ export interface Shark {
   lastKnownY: number;
   attackCooldown: number;
   alert: number;
+  kind: EnemyKind;
+  tier: EnemyTier;
+  warned: boolean;
 }
 
 export interface Chunk {

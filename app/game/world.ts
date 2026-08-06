@@ -1,4 +1,5 @@
 import { Chunk, WORLD } from "./model";
+import { ENEMY_ARCHETYPES, EnemyKind } from "./enemies";
 
 function mulberry32(seed: number) {
   return function random() {
@@ -50,9 +51,12 @@ export function createChunk(index: number, runSeed: number): Chunk {
     });
   }
 
-  const sharkCount = index === 0 ? 1 : index > 1 ? 1 + (random() > 0.68 ? 1 : 0) : 1;
+  const bossEvent = index >= 4 && random() < 0.11;
+  const sharkCount = index === 0 || bossEvent ? 1 : 1 + (random() > 0.58 ? 1 : 0);
   for (let i = 0; i < sharkCount; i++) {
-    const x = start + (index === 0 ? 780 : 310 + random() * 440);
+    const kind: EnemyKind = index === 0 ? "reef-shark" : bossEvent ? "ancient-shark" : random() < 0.68 ? "needlefish" : "reef-shark";
+    const archetype = ENEMY_ARCHETYPES[kind];
+    const x = start + (index === 0 ? 780 : bossEvent ? 690 : 310 + random() * 440);
     sharks.push({
       id: `s-${index}-${i}`,
       x,
@@ -66,6 +70,9 @@ export function createChunk(index: number, runSeed: number): Chunk {
       lastKnownY: 330,
       attackCooldown: 0,
       alert: 0,
+      kind,
+      tier: archetype.tier,
+      warned: false,
     });
   }
 

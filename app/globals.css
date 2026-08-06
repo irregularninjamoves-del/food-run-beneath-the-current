@@ -82,6 +82,7 @@ button:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
 .stealth-chip.hidden { color: #c6fff0; background: rgba(16,95,76,.78); }
 .status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 9px currentColor; }
 .distance-readout { margin-top: 7px; padding: 5px 9px; color: #c6dfe2; background: rgba(5,26,43,.46); border-radius: 4px; font: 700 .58rem var(--font-mono), monospace; }
+.threat-readout { margin-top: 4px; color: #ffd27a; font: 700 .52rem var(--font-mono), monospace; letter-spacing: .09em; }
 .cargo-row { display: flex; justify-content: space-between; align-items: center; font: 700 .59rem var(--font-mono), monospace; letter-spacing: .07em; color: #a8ced1; margin-bottom: 5px; }
 .cargo-row b { font-size: .8rem; }
 .food-color { color: var(--gold); }.junk-color { color: var(--cyan); }
