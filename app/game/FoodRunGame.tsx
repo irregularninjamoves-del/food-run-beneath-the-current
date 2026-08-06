@@ -16,6 +16,7 @@ import { loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
 import { gameAudio } from "./audio";
 import { ENEMY_ARCHETYPES, EnemyKind, TIER_COLORS } from "./enemies";
+import { hasTalent, TALENTS, TalentId, talentPointsForLevel } from "./talents";
 
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; size: number; kind: "bubble" | "spark" };
 
@@ -37,6 +38,7 @@ interface Runtime {
     coverId: string | null;
     invulnerable: number;
     whaleShield: number;
+    hazardCooldown: number;
   };
   chunks: ChunkManager;
   seed: number;
@@ -116,6 +118,7 @@ function freshRuntime(save: SaveData): Runtime {
       coverId: null,
       invulnerable: 0,
       whaleShield: 0,
+      hazardCooldown: 0,
     },
     chunks,
     seed,
@@ -342,6 +345,74 @@ function drawPickup(ctx: CanvasRenderingContext2D, x: number, y: number, kind: s
   ctx.restore();
 }
 
+function drawJellyfish(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, time: number, phase: number) {
+  const pulse = 1 + Math.sin(time * 2.2 + phase) * 0.08;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(pulse, 1 / pulse);
+  ctx.shadowColor = "rgba(224,113,255,.7)";
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = "rgba(211,112,238,.72)";
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, Math.PI, 0);
+  ctx.quadraticCurveTo(radius * 0.65, radius * 0.45, radius * 0.35, radius * 0.16);
+  ctx.quadraticCurveTo(0, radius * 0.62, -radius * 0.35, radius * 0.16);
+  ctx.quadraticCurveTo(-radius * 0.65, radius * 0.45, -radius, 0);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(237,174,255,.66)";
+  ctx.lineWidth = 2;
+  for (let strand = -2; strand <= 2; strand++) {
+    ctx.beginPath();
+    ctx.moveTo(strand * radius * 0.22, radius * 0.18);
+    ctx.bezierCurveTo(strand * 8 + Math.sin(time * 2 + strand) * 7, radius * 0.8, strand * 7 - Math.sin(time + strand) * 8, radius * 1.3, strand * 5, radius * 1.75);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawNet(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, time: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = "rgba(194,205,184,.7)";
+  ctx.lineWidth = 2;
+  for (let row = 0; row <= height; row += 18) {
+    ctx.beginPath();
+    ctx.moveTo(-width / 2, row);
+    ctx.lineTo(width / 2, row + Math.sin(time + row) * 3);
+    ctx.stroke();
+  }
+  for (let column = -width / 2; column <= width / 2; column += 15) {
+    ctx.beginPath();
+    ctx.moveTo(column, 0);
+    ctx.lineTo(column + Math.sin(time * 0.8 + column) * 3, height);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#df785e";
+  for (let buoy = -width / 2; buoy <= width / 2; buoy += 18) {
+    ctx.beginPath();
+    ctx.arc(buoy, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawVent(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, time: number, phase: number) {
+  const active = Math.sin(time * 2.3 + phase) > 0.25;
+  ctx.fillStyle = "#123a47";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, radius * 0.75, 24, 0, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = active ? "rgba(102,244,224,.7)" : "rgba(102,185,183,.28)";
+  ctx.lineWidth = active ? 3 : 1.5;
+  for (let bubble = 0; bubble < 7; bubble++) {
+    const travel = (time * (active ? 95 : 28) + bubble * 29 + phase * 10) % (radius * 2.2);
+    ctx.beginPath();
+    ctx.arc(x + Math.sin(bubble * 2.4) * radius * 0.45, y - travel, 2 + bubble % 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
 function createAudioCue() {
   let audio: AudioContext | null = null;
   return (kind: "pickup" | "danger" | "bank" | "hurt" | "sonar", enabled: boolean) => {
@@ -366,6 +437,13 @@ function createAudioCue() {
 }
 
 const audioCue = createAudioCue();
+
+function protectOneFoodOnDefeat(g: Runtime) {
+  if (hasTalent(g.save.unlockedTalents, "preserver") && g.run.food > 0) {
+    g.run.food -= 1;
+    g.save = { ...g.save, bankedFood: g.save.bankedFood + 1 };
+  }
+}
 
 export default function FoodRunGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -440,7 +518,7 @@ export default function FoodRunGame() {
     g.phase = "playing";
     g.paused = false;
     g.inventory = false;
-    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: 3, stamina: 100, staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0 };
+    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: 3, stamina: 100, staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0, hazardCooldown: 0 };
     g.cameraX = 0;
     g.elapsed = 0;
     g.run = emptyRun();
@@ -514,9 +592,27 @@ export default function FoodRunGame() {
     syncUi(g);
   }, [syncUi]);
 
+  const unlockTalent = useCallback((id: TalentId) => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    const talent = TALENTS.find((entry) => entry.id === id);
+    const points = talentPointsForLevel(g.save.level) - g.save.unlockedTalents.length;
+    if (!talent || hasTalent(g.save.unlockedTalents, id)) return;
+    if (points <= 0 || g.save.level < talent.level || (talent.prerequisite && !hasTalent(g.save.unlockedTalents, talent.prerequisite))) {
+      showNotice(g, talent?.prerequisite ? "Unlock the previous talent in this current first." : "Reach a higher level to earn another talent point.");
+    } else {
+      g.save = { ...g.save, unlockedTalents: [...g.save.unlockedTalents, id] };
+      persistSave(g.save);
+      showNotice(g, `${talent.name} unlocked — ${talent.description}.`, 3);
+      audioCue("bank", g.save.settings.sound);
+    }
+    syncUi(g);
+  }, [syncUi]);
+
   useEffect(() => {
     const g = freshRuntime(loadSave());
     runtimeRef.current = g;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate the UI from the persisted canvas runtime once on mount.
     syncUi(g);
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d", { alpha: false })!;
@@ -621,6 +717,7 @@ export default function FoodRunGame() {
       g.run.duration = g.elapsed;
       g.player.invulnerable = Math.max(0, g.player.invulnerable - dt);
       g.player.whaleShield = Math.max(0, g.player.whaleShield - dt);
+      g.player.hazardCooldown = Math.max(0, g.player.hazardCooldown - dt);
       g.scannerCooldown = Math.max(0, g.scannerCooldown - dt);
       g.scannerPulse = Math.max(0, g.scannerPulse - dt * 0.65);
       g.noticeTime = Math.max(0, g.noticeTime - dt);
@@ -719,6 +816,59 @@ export default function FoodRunGame() {
       g.particles = g.particles.filter((particle) => particle.life > 0).slice(-140);
 
       for (const chunk of g.chunks.active()) {
+        for (const hazard of chunk.hazards) {
+          if (hazard.kind === "net") {
+            const caught = Math.abs(g.player.x - hazard.x) < hazard.width / 2 + 14
+              && g.player.y > hazard.y - 14
+              && g.player.y < hazard.y + hazard.height + 14;
+            if (caught) {
+              const netTrained = hasTalent(g.save.unlockedTalents, "slipstream");
+              const resistance = wantsBurst ? (netTrained ? 0.96 : 0.9) : (netTrained ? 0.88 : 0.76);
+              g.player.vx *= resistance;
+              g.player.vy *= resistance;
+              g.player.stamina = Math.max(0, g.player.stamina - dt * (wantsBurst ? 15 : 7) * (netTrained ? 0.55 : 1));
+              if (g.player.hazardCooldown <= 0) {
+                g.player.hazardCooldown = 2.2;
+                showNotice(g, wantsBurst ? "You force through the net, but it costs stamina." : "ENTANGLED — reverse course or burst through the loose mesh.", 2.1);
+              }
+            }
+          } else if (hazard.kind === "vent") {
+            const active = Math.sin(g.elapsed * 2.3 + hazard.phase) > 0.25;
+            const inColumn = Math.abs(g.player.x - hazard.x) < hazard.radius && g.player.y > hazard.y - hazard.radius * 2.3;
+            if (active && inColumn) {
+              const lift = 235 * (1 - Math.abs(g.player.x - hazard.x) / hazard.radius);
+              g.player.vy -= lift * dt;
+              g.player.stamina = Math.max(0, g.player.stamina - 5 * dt);
+              if (g.player.hazardCooldown <= 0) {
+                g.player.hazardCooldown = 2.4;
+                showNotice(g, "VENT SURGE — ride the lift or swim around its pulse.", 2);
+              }
+            }
+          } else {
+            const stung = distance(g.player.x, g.player.y, hazard.x, hazard.y) < hazard.radius + 20;
+            if (stung && g.player.hazardCooldown <= 0 && g.player.invulnerable <= 0) {
+              const pushX = g.player.x >= hazard.x ? 1 : -1;
+              g.player.hazardCooldown = 2;
+              g.player.invulnerable = 1.4;
+              g.player.health -= 1;
+              g.player.vx = pushX * 175;
+              g.player.vy = -95;
+              g.shake = g.save.settings.reducedMotion ? 1 : 5;
+              showNotice(g, "JELLYFISH STING — it guards space but will not chase.", 2.2);
+              audioCue("hurt", g.save.settings.sound);
+              if (g.player.health <= 0) {
+                g.phase = "defeat";
+                g.paused = false;
+                g.inventory = false;
+                protectOneFoodOnDefeat(g);
+                persistSave(g.save);
+                syncUi(g);
+                return;
+              }
+            }
+          }
+        }
+
         for (const pickup of chunk.pickups) {
           if (pickup.collected || distance(g.player.x, g.player.y, pickup.x, pickup.y) > 30) continue;
           if (g.bagUsed + pickup.size > getBagCapacity(g.save)) {
@@ -727,7 +877,14 @@ export default function FoodRunGame() {
           }
           pickup.collected = true;
           g.bagUsed += pickup.size;
-          if (pickup.kind === "food") g.run.food += pickup.value;
+          if (pickup.kind === "food") {
+            const keenFind = hasTalent(g.save.unlockedTalents, "keen-current") && !pickup.rare && Math.random() < 0.12;
+            g.run.food += pickup.value + (keenFind ? 2 : 0);
+            if (keenFind) {
+              g.run.rareDiscoveries += 1;
+              showNotice(g, "Keen Current found a richer food cluster.", 1.6);
+            }
+          }
           else {
             g.run.salvage += pickup.value;
             g.tutorialFlags.junk = true;
@@ -746,9 +903,10 @@ export default function FoodRunGame() {
           const dist = Math.hypot(dx, dy);
           const playerSpeed = Math.hypot(g.player.vx, g.player.vy);
           const inFront = dx * shark.facing > -40;
-          const burstNoise = wantsBurst && dist < enemy.hearingRadius;
+          const hearingRadius = enemy.hearingRadius * (hasTalent(g.save.unlockedTalents, "quiet-wake") ? 0.72 : 1);
+          const burstNoise = wantsBurst && dist < hearingRadius;
           const sonarNoise = g.scannerPulse > 0.7 && dist < enemy.sonarRadius;
-          const currentVision = enemy.visionRadius * (playerSpeed > 180 ? 1.28 : 1);
+          const currentVision = enemy.visionRadius * (playerSpeed > 180 ? 1.28 : 1) * (hasTalent(g.save.unlockedTalents, "shadow-skin") ? 0.82 : 1);
           const sees = !g.player.hidden && dist < currentVision && (inFront || dist < enemy.visionRadius * 0.38);
           const safeAtReef = g.player.x < 500;
           const detects = !safeAtReef && (sees || burstNoise || sonarNoise);
@@ -857,6 +1015,7 @@ export default function FoodRunGame() {
                 g.phase = "defeat";
                 g.paused = false;
                 g.inventory = false;
+                protectOneFoodOnDefeat(g);
                 persistSave(g.save);
                 syncUi(g);
                 return;
@@ -982,6 +1141,13 @@ export default function FoodRunGame() {
             if (x < -120 || x > width + 120) continue;
             drawSeaweed(ctx, x, cover.y, cover.width, cover.height, g.elapsed, g.player.coverId === cover.id);
           }
+          for (const hazard of chunk.hazards) {
+            const x = hazard.x - g.cameraX;
+            if (x < -160 || x > width + 160) continue;
+            if (hazard.kind === "jellyfish") drawJellyfish(ctx, x, hazard.y, hazard.radius, g.elapsed, hazard.phase);
+            else if (hazard.kind === "net") drawNet(ctx, x, hazard.y, hazard.width, hazard.height, g.elapsed);
+            else drawVent(ctx, x, hazard.y, hazard.radius, g.elapsed, hazard.phase);
+          }
           for (const pickup of chunk.pickups) {
             if (pickup.collected) continue;
             const x = pickup.x - g.cameraX;
@@ -1001,16 +1167,18 @@ export default function FoodRunGame() {
             const enemy = ENEMY_ARCHETYPES[shark.kind];
             if (g.scannerPulse > 0) {
               const alpha = g.scannerPulse * 0.46;
+              const shownVision = enemy.visionRadius * (hasTalent(g.save.unlockedTalents, "shadow-skin") ? 0.82 : 1);
+              const shownHearing = enemy.hearingRadius * (hasTalent(g.save.unlockedTalents, "quiet-wake") ? 0.72 : 1);
               ctx.save();
               ctx.strokeStyle = `${TIER_COLORS[enemy.tier]}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`;
               ctx.lineWidth = enemy.tier === "boss" ? 3 : 1.5;
               ctx.beginPath();
-              ctx.arc(x, shark.y, enemy.visionRadius, 0, Math.PI * 2);
+              ctx.arc(x, shark.y, shownVision, 0, Math.PI * 2);
               ctx.stroke();
               ctx.setLineDash([8, 10]);
               ctx.globalAlpha = 0.72;
               ctx.beginPath();
-              ctx.arc(x, shark.y, enemy.hearingRadius, 0, Math.PI * 2);
+              ctx.arc(x, shark.y, shownHearing, 0, Math.PI * 2);
               ctx.stroke();
               ctx.restore();
             }
@@ -1123,14 +1291,34 @@ export default function FoodRunGame() {
   };
 
   const pressControl = (key: string, down: boolean) => {
-    if (down) held.current.add(key);
-    else held.current.delete(key);
+    if (!down) {
+      held.current.delete(key);
+      return;
+    }
+
+    held.current.add(key);
+    const g = runtimeRef.current;
+    if (!g || g.phase !== "playing" || g.paused || g.inventory) return;
+
+    // A real touch can be shorter than one animation frame. Give every tap a
+    // small impulse so quick mobile input still feels deliberate and responsive.
+    const impulse = 20;
+    if (key === "d") { g.player.vx += impulse; g.player.facing = 1; }
+    if (key === "a") { g.player.vx -= impulse; g.player.facing = -1; }
+    if (key === "w") g.player.vy -= impulse;
+    if (key === "s") g.player.vy += impulse;
+    if (key === "shift") {
+      g.player.stamina = Math.max(0, g.player.stamina - 4);
+      g.player.staminaDelay = 0.9;
+      g.tutorialFlags.burst = true;
+    }
   };
 
   const bagCost = 4 + ui.save.bagLevel * 5;
   const dayProgress = (ui.run.duration % WORLD.dayLength) / WORLD.dayLength;
   const period = dayProgress < 0.43 ? "DAY" : dayProgress < 0.57 ? "SUNSET" : dayProgress < 0.93 ? "NIGHT" : "DAWN";
   const xpTarget = xpForLevel(ui.save.level);
+  const availableTalentPoints = Math.max(0, talentPointsForLevel(ui.save.level) - ui.save.unlockedTalents.length);
 
   return (
     <main
@@ -1224,10 +1412,28 @@ export default function FoodRunGame() {
               {ui.save.salvage < bagCost && <small className="locked-note">Recover {bagCost - ui.save.salvage} more salvage to craft.</small>}
             </article>
             <article className="reef-card talent-card">
-              <span className="eyebrow">TALENT PATHS · PREVIEW</span>
-              <div className="talent-row"><span className="talent-dot stealth-tree">◌</span><div><b>Ghost Current</b><small>Quieter bursts · Level 3</small></div></div>
-              <div className="talent-row"><span className="talent-dot collect-tree">◇</span><div><b>Keen Forager</b><small>Rare food sense · Level 4</small></div></div>
-              <div className="talent-row"><span className="talent-dot defense-tree">△</span><div><b>Reefguard</b><small>Improved decoys · Level 5</small></div></div>
+              <div className="talent-heading"><span className="eyebrow">TALENT CURRENTS</span><strong>{availableTalentPoints} POINT{availableTalentPoints === 1 ? "" : "S"}</strong></div>
+              <p className="talent-intro">Earn one point at levels 3, 5, 7, and every second level after. Choose survival strategies, never firepower.</p>
+              <div className="talent-grid">
+                {TALENTS.map((talent) => {
+                  const unlocked = hasTalent(ui.save.unlockedTalents, talent.id);
+                  const prerequisiteMet = !talent.prerequisite || hasTalent(ui.save.unlockedTalents, talent.prerequisite);
+                  const available = !unlocked && availableTalentPoints > 0 && ui.save.level >= talent.level && prerequisiteMet;
+                  return (
+                    <button
+                      key={talent.id}
+                      className={`talent-choice ${talent.branch} ${unlocked ? "unlocked" : ""}`}
+                      onClick={() => unlockTalent(talent.id)}
+                      disabled={!available}
+                      aria-label={`${talent.name}: ${unlocked ? "unlocked" : available ? "unlock" : `locked until level ${talent.level}`}`}
+                    >
+                      <span className="talent-symbol">{talent.branch === "stealth" ? "◌" : "◇"}</span>
+                      <span><b>{talent.name}</b><small>{talent.description} · LV {talent.level}</small></span>
+                      <em>{unlocked ? "✓" : available ? "+" : prerequisiteMet ? `LV${talent.level}` : "CHAIN"}</em>
+                    </button>
+                  );
+                })}
+              </div>
             </article>
           </div>
           {ui.notice && <div className="home-notice">{ui.notice}</div>}

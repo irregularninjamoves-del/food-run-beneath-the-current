@@ -17,6 +17,7 @@ export function createChunk(index: number, runSeed: number): Chunk {
   const covers: Chunk["covers"] = [];
   const sharks: Chunk["sharks"] = [];
   const rocks: Chunk["rocks"] = [];
+  const hazards: Chunk["hazards"] = [];
 
   const coverCount = index === 0 ? 3 : 2 + Math.floor(random() * 3);
   for (let i = 0; i < coverCount; i++) {
@@ -85,12 +86,41 @@ export function createChunk(index: number, runSeed: number): Chunk {
     });
   }
 
+  if (index > 0) {
+    const hazardCount = 1 + Math.floor(random() * 3);
+    for (let i = 0; i < hazardCount; i++) {
+      let x = start + 170 + random() * (WORLD.chunkWidth - 260);
+      for (let attempt = 0; attempt < 5 && covers.some((cover) => Math.abs(cover.x - x) < 115); attempt++) {
+        x = start + 170 + random() * (WORLD.chunkWidth - 260);
+      }
+      const roll = random();
+      const kind = roll < 0.48 ? "jellyfish" : roll < 0.78 ? "net" : "vent";
+      const fromFloor = random() > 0.5;
+      const height = kind === "net" ? 135 + random() * 125 : kind === "vent" ? 38 : 50;
+      hazards.push({
+        id: `h-${index}-${i}`,
+        kind,
+        x,
+        y: kind === "vent"
+          ? WORLD.floorY - 8
+          : kind === "net"
+            ? fromFloor ? WORLD.floorY - height : WORLD.surfaceY + 28
+            : WORLD.surfaceY + 105 + random() * (WORLD.floorY - WORLD.surfaceY - 210),
+        width: kind === "net" ? 30 + random() * 24 : kind === "vent" ? 74 : 42,
+        height,
+        radius: kind === "jellyfish" ? 28 + random() * 10 : kind === "vent" ? 58 : 0,
+        phase: random() * Math.PI * 2,
+      });
+    }
+  }
+
   return {
     index,
     pickups,
     covers,
     sharks,
     rocks,
+    hazards,
     current: index > 1 && random() > 0.76 ? (random() > 0.5 ? 1 : -1) * (16 + random() * 20) : 0,
   };
 }

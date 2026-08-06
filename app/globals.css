@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  --font-sans: "Trebuchet MS", "Arial Rounded MT Bold", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
   --ink: #edfdf8;
   --muted: #9fc7ce;
   --panel: rgba(5, 29, 48, 0.78);
@@ -114,6 +116,7 @@ kbd { display: inline-grid; place-items: center; min-width: 28px; height: 25px; 
 .inventory-card strong { display: block; margin-top: 3px; font-size: 1.2rem; }.inventory-card small { color: #91b8bd; }
 .upgrade-card { grid-row: span 2; }.upgrade-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }.upgrade-top strong { display: block; margin-top: 7px; font-size: 1.15rem; }.capacity-badge { color: var(--gold); font: 700 .58rem var(--font-mono), monospace; letter-spacing: .08em; white-space: nowrap; }.upgrade-card p { color: #a9cbce; font-size: .87rem; line-height: 1.5; }.locked-note { display: block; margin-top: 9px; color: #e8b9a9; }
 .talent-card { display: grid; gap: 10px; }.talent-row { display: flex; align-items: center; gap: 10px; }.talent-row div { display: flex; flex-direction: column; }.talent-row small { color: #86adb4; }.talent-dot { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; }.stealth-tree { color: var(--mint); }.collect-tree { color: var(--gold); }.defense-tree { color: var(--coral); }
+.talent-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.talent-heading strong { color: var(--gold); font: 700 .62rem var(--font-mono), monospace; letter-spacing: .08em; }.talent-intro { margin: 0; color: #91b8bd; font-size: .76rem; line-height: 1.4; }.talent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }.talent-choice { min-width: 0; display: grid; grid-template-columns: 27px 1fr auto; align-items: center; gap: 8px; padding: 9px; cursor: pointer; text-align: left; color: #dcefeb; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09); border-radius: 6px; }.talent-choice.stealth { border-left-color: rgba(121,244,197,.55); }.talent-choice.gathering { border-left-color: rgba(255,214,110,.55); }.talent-choice:disabled { cursor: not-allowed; opacity: .52; }.talent-choice.unlocked { opacity: 1; background: rgba(121,244,197,.08); border-color: rgba(121,244,197,.28); }.talent-choice > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }.talent-choice b { overflow: hidden; text-overflow: ellipsis; color: #f0fff8; font-size: .72rem; white-space: nowrap; }.talent-choice small { overflow: hidden; text-overflow: ellipsis; color: #83aeb3; font-size: .62rem; white-space: nowrap; }.talent-choice em { color: var(--gold); font: normal 700 .55rem var(--font-mono), monospace; }.talent-symbol { color: var(--mint); font-size: 1rem; }.talent-choice.gathering .talent-symbol { color: var(--gold); }
 .home-actions { width: min(980px, 100%); margin: 18px auto auto; display: flex; align-items: center; gap: 20px; }.home-notice { bottom: 91px; }
 
 .modal-backdrop { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(2,16,29,.72); backdrop-filter: blur(8px); }
@@ -139,7 +142,7 @@ kbd { display: inline-grid; place-items: center; min-width: 28px; height: 25px; 
   .mobile-controls button { pointer-events: auto; touch-action: none; color: white; background: rgba(7,33,51,.7); border: 1px solid rgba(255,255,255,.2); border-radius: 50%; }
   .touch-pad { width: 114px; height: 82px; position: relative; pointer-events: none; }.touch-pad button { position: absolute; width: 42px; height: 42px; }.touch-pad button:nth-child(1) { left: 36px; top: 0; }.touch-pad button:nth-child(2) { left: 0; top: 38px; }.touch-pad button:nth-child(3) { left: 36px; top: 38px; }.touch-pad button:nth-child(4) { left: 72px; top: 38px; }
   .touch-burst { width: 68px; height: 68px; font: 700 .55rem var(--font-mono), monospace; }.touch-action { width: 50px; height: 50px; font-weight: 900; }
-  .wide-overlay { padding: 22px 14px; }.home-heading { margin-top: 0; }.home-heading h2 { font-size: 2rem; }.home-grid { grid-template-columns: 1fr; }.upgrade-card { grid-row: auto; }.home-actions { margin-bottom: 12px; flex-wrap: wrap; }.reef-card { padding: 14px; }
+  .wide-overlay { padding: 22px 14px; }.home-heading { margin-top: 0; }.home-heading h2 { font-size: 2rem; }.home-grid, .talent-grid { grid-template-columns: 1fr; }.upgrade-card { grid-row: auto; }.home-actions { margin-bottom: 12px; flex-wrap: wrap; }.reef-card { padding: 14px; }
   .result-grid { grid-template-columns: 1fr 1fr; }.title-screen h1 span { font-size: 4.4rem; }
 }
 

@@ -3,6 +3,7 @@ import test from "node:test";
 import { bankRunProgress, getBagCapacity, STARTER_SAVE, WORLD, xpForLevel } from "../app/game/model";
 import { ChunkManager, createChunk } from "../app/game/world";
 import { ENEMY_ARCHETYPES } from "../app/game/enemies";
+import { TALENTS, talentPointsForLevel } from "../app/game/talents";
 
 test("procedural chunks are deterministic for a run seed", () => {
   assert.deepEqual(createChunk(5, 424242), createChunk(5, 424242));
@@ -70,4 +71,29 @@ test("procedural distance tiers can generate all three enemy classes", () => {
     for (const enemy of createChunk(index, 94017).sharks) tiers.add(enemy.tier);
   }
   assert.deepEqual([...tiers].sort(), ["boss", "lieutenant", "minion"]);
+});
+
+test("obstacle chunks stay varied and always leave a passable route", () => {
+  const kinds = new Set<string>();
+  assert.equal(createChunk(0, 2211).hazards.length, 0, "home tutorial water must remain safe");
+  for (let index = 1; index < 80; index += 1) {
+    const chunk = createChunk(index, 2211);
+    assert.ok(chunk.hazards.length >= 1);
+    for (const hazard of chunk.hazards) {
+      kinds.add(hazard.kind);
+      if (hazard.kind === "net") {
+        assert.ok(hazard.height <= 260, "partial nets must never block the full water column");
+      }
+    }
+  }
+  assert.deepEqual([...kinds].sort(), ["jellyfish", "net", "vent"]);
+});
+
+test("level seven grants three real noncombat talent points", () => {
+  assert.equal(talentPointsForLevel(1), 0);
+  assert.equal(talentPointsForLevel(3), 1);
+  assert.equal(talentPointsForLevel(5), 2);
+  assert.equal(talentPointsForLevel(7), 3);
+  assert.ok(TALENTS.every((talent) => !talent.name.toLowerCase().includes("weapon")));
+  assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 10);
 });

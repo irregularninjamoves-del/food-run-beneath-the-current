@@ -1,4 +1,5 @@
 import type { EnemyKind, EnemyTier } from "./enemies";
+import type { TalentId } from "./talents";
 
 export type Phase = "title" | "home" | "playing" | "results" | "defeat";
 export type PredatorState =
@@ -32,6 +33,19 @@ export interface Cover {
   height: number;
 }
 
+export type HazardKind = "jellyfish" | "net" | "vent";
+
+export interface Hazard {
+  id: string;
+  kind: HazardKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  radius: number;
+  phase: number;
+}
+
 export interface Shark {
   id: string;
   x: number;
@@ -56,6 +70,7 @@ export interface Chunk {
   covers: Cover[];
   sharks: Shark[];
   rocks: { x: number; y: number; r: number; variant: number }[];
+  hazards: Hazard[];
   current: number;
 }
 
@@ -78,6 +93,7 @@ export interface SaveData {
   successfulRuns: number;
   tutorialComplete: boolean;
   reefLevel: number;
+  unlockedTalents: TalentId[];
   settings: {
     reducedMotion: boolean;
     highContrast: boolean;
@@ -106,6 +122,7 @@ export const STARTER_SAVE: SaveData = {
   successfulRuns: 0,
   tutorialComplete: false,
   reefLevel: 0,
+  unlockedTalents: [],
   settings: {
     reducedMotion: false,
     highContrast: false,
@@ -127,7 +144,7 @@ export const TUTORIAL_STEPS = [
 ] as const;
 
 export const getBagCapacity = (save: SaveData) =>
-  WORLD.baseBagCapacity + save.bagLevel * WORLD.bagCapacityPerLevel;
+  WORLD.baseBagCapacity + save.bagLevel * WORLD.bagCapacityPerLevel + (save.unlockedTalents.includes("deep-pockets") ? 2 : 0);
 
 export const xpForLevel = (level: number) => 80 + (level - 1) * 55;
 
