@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   bankRunProgress,
   getBagCapacity,
@@ -448,8 +448,11 @@ function protectOneFoodOnDefeat(g: Runtime) {
 export default function FoodRunGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const held = useRef(new Set<string>());
+  const touchStick = useRef({ x: 0, y: 0 });
+  const touchStickPointer = useRef<number | null>(null);
   const runtimeRef = useRef<Runtime | null>(null);
   const actionQueue = useRef<string[]>([]);
+  const [stickVisual, setStickVisual] = useState({ x: 0, y: 0 });
   const [ui, setUi] = useState<UiSnapshot>(() => {
     const save = STARTER_SAVE;
     return {
@@ -763,19 +766,21 @@ export default function FoodRunGame() {
       const right = held.current.has("d") || held.current.has("arrowright");
       const up = held.current.has("w") || held.current.has("arrowup");
       const down = held.current.has("s") || held.current.has("arrowdown");
-      const inputX = (right ? 1 : 0) - (left ? 1 : 0);
-      const inputY = (down ? 1 : 0) - (up ? 1 : 0);
-      const inputLength = Math.hypot(inputX, inputY) || 1;
-      const moving = inputX !== 0 || inputY !== 0;
+      const inputX = (right ? 1 : 0) - (left ? 1 : 0) + touchStick.current.x;
+      const inputY = (down ? 1 : 0) - (up ? 1 : 0) + touchStick.current.y;
+      const rawInputLength = Math.hypot(inputX, inputY);
+      const inputLength = rawInputLength || 1;
+      const inputStrength = Math.min(1, rawInputLength);
+      const moving = inputStrength > 0.01;
       const wantsBurst = (held.current.has("shift") || held.current.has(" ")) && moving && g.player.stamina > 1;
       const loadRatio = g.bagUsed / getBagCapacity(g.save);
       const loadPenalty = 1 - Math.max(0, loadRatio - 0.6) * 0.18;
       const accel = (wantsBurst ? 520 : 245) * loadPenalty;
       const maxSpeed = (wantsBurst ? 295 : 142) * loadPenalty;
       if (moving) {
-        g.player.vx += (inputX / inputLength) * accel * dt;
-        g.player.vy += (inputY / inputLength) * accel * dt;
-        if (inputX) g.player.facing = inputX > 0 ? 1 : -1;
+        g.player.vx += (inputX / inputLength) * accel * inputStrength * dt;
+        g.player.vy += (inputY / inputLength) * accel * inputStrength * dt;
+        if (Math.abs(inputX) > 0.05) g.player.facing = inputX > 0 ? 1 : -1;
         g.player.hidden = false;
         g.player.coverId = null;
         if (Math.abs(g.player.x - 225) > 70) g.tutorialFlags.moved = true;
@@ -1314,6 +1319,53 @@ export default function FoodRunGame() {
     }
   };
 
+  const updateTouchStick = (element: HTMLDivElement, clientX: number, clientY: number) => {
+    const bounds = element.getBoundingClientRect();
+    const dx = clientX - (bounds.left + bounds.width / 2);
+    const dy = clientY - (bounds.top + bounds.height / 2);
+    const distanceFromCenter = Math.hypot(dx, dy);
+    const maxTravel = Math.max(1, Math.min(bounds.width, bounds.height) * 0.29);
+    const visualScale = distanceFromCenter > maxTravel ? maxTravel / distanceFromCenter : 1;
+    const visualX = dx * visualScale;
+    const visualY = dy * visualScale;
+    const deadZone = maxTravel * 0.1;
+
+    if (distanceFromCenter <= deadZone) {
+      touchStick.current = { x: 0, y: 0 };
+    } else {
+      const strength = Math.min(1, (distanceFromCenter - deadZone) / (maxTravel - deadZone));
+      touchStick.current = {
+        x: (dx / distanceFromCenter) * strength,
+        y: (dy / distanceFromCenter) * strength,
+      };
+    }
+
+    setStickVisual({ x: visualX, y: visualY });
+  };
+
+  const beginTouchStick = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    touchStickPointer.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateTouchStick(event.currentTarget, event.clientX, event.clientY);
+  };
+
+  const moveTouchStick = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (touchStickPointer.current !== event.pointerId) return;
+    event.preventDefault();
+    updateTouchStick(event.currentTarget, event.clientX, event.clientY);
+  };
+
+  const endTouchStick = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (touchStickPointer.current !== event.pointerId) return;
+    touchStickPointer.current = null;
+    touchStick.current = { x: 0, y: 0 };
+    setStickVisual({ x: 0, y: 0 });
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const bagCost = 4 + ui.save.bagLevel * 5;
   const dayProgress = (ui.run.duration % WORLD.dayLength) / WORLD.dayLength;
   const period = dayProgress < 0.43 ? "DAY" : dayProgress < 0.57 ? "SUNSET" : dayProgress < 0.93 ? "NIGHT" : "DAWN";
@@ -1370,11 +1422,22 @@ export default function FoodRunGame() {
           </footer>
 
           <div className="mobile-controls" aria-label="Touch swim controls">
-            <div className="touch-pad">
-              <button onPointerDown={() => pressControl("w", true)} onPointerUp={() => pressControl("w", false)} onPointerLeave={() => pressControl("w", false)}>▲</button>
-              <button onPointerDown={() => pressControl("a", true)} onPointerUp={() => pressControl("a", false)} onPointerLeave={() => pressControl("a", false)}>◀</button>
-              <button onPointerDown={() => pressControl("s", true)} onPointerUp={() => pressControl("s", false)} onPointerLeave={() => pressControl("s", false)}>▼</button>
-              <button onPointerDown={() => pressControl("d", true)} onPointerUp={() => pressControl("d", false)} onPointerLeave={() => pressControl("d", false)}>▶</button>
+            <div
+              className="touch-stick"
+              role="group"
+              aria-label="Movement thumbstick. Drag to swim in any direction."
+              onPointerDown={beginTouchStick}
+              onPointerMove={moveTouchStick}
+              onPointerUp={endTouchStick}
+              onPointerCancel={endTouchStick}
+              onLostPointerCapture={endTouchStick}
+            >
+              <span className="touch-stick-guide" aria-hidden="true" />
+              <span
+                className="touch-stick-knob"
+                aria-hidden="true"
+                style={{ left: `calc(50% + ${stickVisual.x}px)`, top: `calc(50% + ${stickVisual.y}px)` }}
+              />
             </div>
             <button className="touch-burst" onPointerDown={() => pressControl("shift", true)} onPointerUp={() => pressControl("shift", false)} onPointerLeave={() => pressControl("shift", false)}>BURST</button>
             <button className="touch-action" onClick={() => actionQueue.current.push("e")}>E</button>
