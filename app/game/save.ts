@@ -11,6 +11,7 @@ export function loadSave(): SaveData {
       ...structuredClone(STARTER_SAVE),
       ...parsed,
       settings: { ...STARTER_SAVE.settings, ...parsed.settings },
+      schools: { ...STARTER_SAVE.schools, ...parsed.schools },
     };
   } catch {
     return structuredClone(STARTER_SAVE);

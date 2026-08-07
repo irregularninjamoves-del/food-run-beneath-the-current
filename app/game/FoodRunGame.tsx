@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   bankRunProgress,
+  FISH_TYPES,
   getBagCapacity,
   Phase,
   RunStats,
   SaveData,
   STARTER_SAVE,
+  SCHOOLS,
+  SchoolId,
   TUTORIAL_STEPS,
   WORLD,
   xpForLevel,
@@ -82,6 +85,7 @@ interface UiSnapshot {
   nearHome: boolean;
   nearCover: boolean;
   nearWhale: boolean;
+  nearDeepSchool: boolean;
   resultXp: number;
   levelGained: boolean;
 }
@@ -501,6 +505,7 @@ export default function FoodRunGame() {
       nearHome: g.player.x < 315,
       nearCover,
       nearWhale: !g.whale.helped && distance(g.player.x, g.player.y, g.whale.x, g.whale.y) < 150,
+      nearDeepSchool: distance(g.player.x, g.player.y, 2450, 390) < 150,
       resultXp: g.resultXp,
       levelGained: g.levelGained,
     });
@@ -558,6 +563,7 @@ export default function FoodRunGame() {
     if (!next.tutorialComplete && g.tutorialStep >= TUTORIAL_STEPS.length - 1) next.tutorialComplete = true;
     g.save = next;
     g.resultXp = banked.earnedXp;
+    showNotice(g, `${banked.foodDelivered} food fed to ${SCHOOLS[banked.schoolId].name}${banked.schoolLevelGained ? " — school grew!" : ""}`, 3);
     g.phase = "results";
     g.paused = false;
     g.inventory = false;
@@ -565,6 +571,22 @@ export default function FoodRunGame() {
     audioCue("bank", next.settings.sound);
     gameAudio.setMusic("home", next.settings.music);
     gameAudio.playCreature("dolphin", next.settings.sound);
+    syncUi(g);
+  }, [syncUi]);
+
+  const chooseFish = useCallback((fishType: SaveData["fishType"]) => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    g.save = { ...g.save, fishType };
+    persistSave(g.save);
+    syncUi(g);
+  }, [syncUi]);
+
+  const chooseSchool = useCallback((schoolId: SchoolId) => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    g.save = { ...g.save, selectedSchool: schoolId };
+    persistSave(g.save);
     syncUi(g);
   }, [syncUi]);
 
@@ -669,8 +691,16 @@ export default function FoodRunGame() {
     };
 
     const interact = () => {
+      const atDeepSchool = distance(g.player.x, g.player.y, 2450, 390) < 150;
+      if (atDeepSchool) {
+        if (g.save.selectedSchool !== "deep") showNotice(g, "This haul is pledged to Sunbeam Shoal. Choose Midnight Shoal before your next dive.", 2.6);
+        else if (g.run.food + g.run.salvage <= 0) showNotice(g, "Midnight Shoal needs food, not an empty current.");
+        else bankRun(g);
+        return;
+      }
       if (g.player.x < 315) {
-        if (g.run.food + g.run.salvage <= 0) showNotice(g, "Your bag is empty. The school needs food.");
+        if (g.save.selectedSchool !== "reef") showNotice(g, "Your haul is pledged to Midnight Shoal in deep water.", 2.4);
+        else if (g.run.food + g.run.salvage <= 0) showNotice(g, "Your bag is empty. The school needs food.");
         else if (!g.save.tutorialComplete && (g.tutorialStep < TUTORIAL_STEPS.length - 1 || g.run.food <= 0)) {
           showNotice(g, "Finish the training route before extracting your haul.", 2.2);
         }
@@ -775,8 +805,9 @@ export default function FoodRunGame() {
       const wantsBurst = (held.current.has("shift") || held.current.has(" ")) && moving && g.player.stamina > 1;
       const loadRatio = g.bagUsed / getBagCapacity(g.save);
       const loadPenalty = 1 - Math.max(0, loadRatio - 0.6) * 0.18;
-      const accel = (wantsBurst ? 520 : 245) * loadPenalty;
-      const maxSpeed = (wantsBurst ? 295 : 142) * loadPenalty;
+      const fish = FISH_TYPES[g.save.fishType];
+      const accel = (wantsBurst ? 520 : 245) * loadPenalty * fish.speed;
+      const maxSpeed = (wantsBurst ? 295 : 142) * loadPenalty * fish.speed;
       if (moving) {
         g.player.vx += (inputX / inputLength) * accel * inputStrength * dt;
         g.player.vy += (inputY / inputLength) * accel * inputStrength * dt;
@@ -1132,6 +1163,22 @@ export default function FoodRunGame() {
           drawFish(ctx, hx + 75 + (i % 4) * 38, 500 + Math.floor(i / 4) * 40 + Math.sin(g.elapsed + i) * 7, i % 2 ? -1 : 1, 0, false, false);
         }
 
+        const deepX = 2450 - g.cameraX;
+        if (deepX > -240 && deepX < width + 240) {
+          const deepSchool = g.save.schools.deep;
+          ctx.save();
+          ctx.fillStyle = "rgba(14,54,92,.7)";
+          ctx.beginPath(); ctx.ellipse(deepX, 470, 170, 100, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = "#78d7ca";
+          ctx.font = "700 12px monospace";
+          ctx.fillText("MIDNIGHT SHOAL", deepX - 56, 285);
+          for (let i = 0; i < 4 + deepSchool.population; i++) {
+            const orbit = g.elapsed * 0.8 + i * 0.7;
+            drawFish(ctx, deepX + Math.cos(orbit) * (62 + (i % 3) * 14), 390 + Math.sin(orbit * 1.4) * (38 + (i % 2) * 13), i % 2 ? -1 : 1, 0, false, false);
+          }
+          ctx.restore();
+        }
+
         for (const chunk of g.chunks.active()) {
           for (const rock of chunk.rocks) {
             const x = rock.x - g.cameraX;
@@ -1367,6 +1414,8 @@ export default function FoodRunGame() {
   };
 
   const bagCost = 4 + ui.save.bagLevel * 5;
+  const activeSchool = ui.save.schools[ui.save.selectedSchool];
+  const activeSchoolGoal = SCHOOLS[ui.save.selectedSchool].requiredBase + (activeSchool.level - 1) * 16;
   const dayProgress = (ui.run.duration % WORLD.dayLength) / WORLD.dayLength;
   const period = dayProgress < 0.43 ? "DAY" : dayProgress < 0.57 ? "SUNSET" : dayProgress < 0.93 ? "NIGHT" : "DAWN";
   const xpTarget = xpForLevel(ui.save.level);
@@ -1406,14 +1455,14 @@ export default function FoodRunGame() {
 
           <aside className="mission-card">
             <div className="eyebrow">{ui.save.tutorialComplete ? "EXPEDITION" : `TRAINING ${Math.min(ui.tutorialStep + 1, TUTORIAL_STEPS.length)}/${TUTORIAL_STEPS.length}`}</div>
-            <strong>{ui.save.tutorialComplete ? (ui.run.food >= 5 ? "A good haul. Return when ready." : "Gather at least 5 food") : TUTORIAL_STEPS[Math.min(ui.tutorialStep, TUTORIAL_STEPS.length - 1)]}</strong>
+            <strong>{ui.save.tutorialComplete ? `${SCHOOLS[ui.save.selectedSchool].name}: ${activeSchool.food}/${activeSchoolGoal} food · ${ui.run.food >= 5 ? "haul is ready" : "gather food"}` : TUTORIAL_STEPS[Math.min(ui.tutorialStep, TUTORIAL_STEPS.length - 1)]}</strong>
             {!ui.save.tutorialComplete && <div className="step-track"><i style={{ width: `${((ui.tutorialStep + 1) / TUTORIAL_STEPS.length) * 100}%` }} /></div>}
           </aside>
 
           <div className="run-meta"><span>{period}</span><span>LV {ui.save.level}</span><span>SONAR {ui.scannerCooldown > 0 ? `${Math.ceil(ui.scannerCooldown)}s` : "READY"}</span></div>
 
-          {(ui.nearHome || ui.nearCover || ui.nearWhale) && !ui.paused && !ui.inventory && (
-            <div className="action-prompt"><kbd>E</kbd><span>{ui.nearHome ? "ENTER REEF & BANK HAUL" : ui.nearWhale ? "ANSWER WHALE SONG" : ui.hidden ? "LEAVE COVER" : "HIDE IN SEAWEED"}</span></div>
+          {(ui.nearHome || ui.nearDeepSchool || ui.nearCover || ui.nearWhale) && !ui.paused && !ui.inventory && (
+            <div className="action-prompt"><kbd>E</kbd><span>{ui.nearHome ? "FEED SUNBEAM SHOAL" : ui.nearDeepSchool ? "FEED MIDNIGHT SHOAL" : ui.nearWhale ? "ANSWER WHALE SONG" : ui.hidden ? "LEAVE COVER" : "HIDE IN SEAWEED"}</span></div>
           )}
           {ui.notice && <div className="notice">{ui.notice}</div>}
 
@@ -1460,6 +1509,19 @@ export default function FoodRunGame() {
           <div className="home-heading">
             <div><div className="eyebrow">SAFE WATER · HOME REEF</div><h2>The school is waiting.</h2><p>Choose your gear, then bring everyone a little more hope.</p></div>
             <div className="level-medallion"><span>LEVEL</span><b>{ui.save.level}</b><small>{ui.save.xp}/{xpTarget} XP</small></div>
+          </div>
+          <div className="school-choice-grid" aria-label="Choose a school to support">
+            {(Object.keys(SCHOOLS) as SchoolId[]).map((schoolId) => {
+              const school = ui.save.schools[schoolId];
+              const goal = SCHOOLS[schoolId].requiredBase + (school.level - 1) * 16;
+              const selected = ui.save.selectedSchool === schoolId;
+              return <button key={schoolId} className={`school-choice ${selected ? "selected" : ""}`} onClick={() => chooseSchool(schoolId)}>
+                <span className="eyebrow">{SCHOOLS[schoolId].location}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
+              </button>;
+            })}
+          </div>
+          <div className="fish-choice-row" aria-label="Choose fish type">
+            {(Object.keys(FISH_TYPES) as SaveData["fishType"][]).map((fishType) => <button key={fishType} className={`fish-choice ${ui.save.fishType === fishType ? "selected" : ""}`} onClick={() => chooseFish(fishType)}><b>{FISH_TYPES[fishType].name}</b><small>{FISH_TYPES[fishType].description}</small></button>)}
           </div>
           <div className="home-grid">
             <article className="reef-card inventory-card">

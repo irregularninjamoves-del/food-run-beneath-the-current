@@ -12,6 +12,20 @@ export type PredatorState =
   | "RETURN";
 
 export type PickupKind = "food" | "junk";
+export type FishType = "swift" | "forager";
+export type SchoolId = "reef" | "deep";
+
+export const FISH_TYPES: Record<FishType, { name: string; speed: number; bagBonus: number; description: string }> = {
+  swift: { name: "Swift Fish", speed: 1.16, bagBonus: -2, description: "Fast currents and cleaner escapes, but a lighter bag." },
+  forager: { name: "Forager Fish", speed: 0.88, bagBonus: 3, description: "A slower swimmer built for valuable, heavy returns." },
+};
+
+export const SCHOOLS: Record<SchoolId, { name: string; location: string; requiredBase: number; description: string }> = {
+  reef: { name: "Sunbeam Shoal", location: "Shallow Reef", requiredBase: 12, description: "A safe young school learning to thrive." },
+  deep: { name: "Midnight Shoal", location: "Deep Water", requiredBase: 20, description: "A distant school surviving beyond the kelp." },
+};
+
+export interface SchoolProgress { level: number; food: number; population: number; }
 
 export interface Pickup {
   id: string;
@@ -93,6 +107,9 @@ export interface SaveData {
   successfulRuns: number;
   tutorialComplete: boolean;
   reefLevel: number;
+  fishType: FishType;
+  selectedSchool: SchoolId;
+  schools: Record<SchoolId, SchoolProgress>;
   unlockedTalents: TalentId[];
   settings: {
     reducedMotion: boolean;
@@ -122,6 +139,9 @@ export const STARTER_SAVE: SaveData = {
   successfulRuns: 0,
   tutorialComplete: false,
   reefLevel: 0,
+  fishType: "swift",
+  selectedSchool: "reef",
+  schools: { reef: { level: 1, food: 0, population: 8 }, deep: { level: 1, food: 0, population: 5 } },
   unlockedTalents: [],
   settings: {
     reducedMotion: false,
@@ -144,23 +164,36 @@ export const TUTORIAL_STEPS = [
 ] as const;
 
 export const getBagCapacity = (save: SaveData) =>
-  WORLD.baseBagCapacity + save.bagLevel * WORLD.bagCapacityPerLevel + (save.unlockedTalents.includes("deep-pockets") ? 2 : 0);
+  WORLD.baseBagCapacity + save.bagLevel * WORLD.bagCapacityPerLevel + FISH_TYPES[save.fishType].bagBonus + (save.unlockedTalents.includes("deep-pockets") ? 2 : 0);
 
 export const xpForLevel = (level: number) => 80 + (level - 1) * 55;
 
 export function bankRunProgress(save: SaveData, run: RunStats) {
-  const earnedXp = Math.round(run.food * 9 + run.salvage * 5 + Math.min(run.distance / 28, 60) + run.creaturesHelped * 18 + run.predatorsEscaped * 9);
+  const schoolId = save.selectedSchool;
+  const foodDelivered = run.food + (save.fishType === "forager" && run.food >= 4 ? 1 : 0);
+  const earnedXp = Math.round(foodDelivered * 10 + run.salvage * 5 + Math.min(run.distance / 25, 65) + run.creaturesHelped * 18 + run.predatorsEscaped * 9);
   const next = { ...save };
-  next.bankedFood += run.food;
+  const school = { ...next.schools[schoolId] };
+  school.food += foodDelivered;
+  const required = SCHOOLS[schoolId].requiredBase + (school.level - 1) * 10;
+  let schoolLevelGained = false;
+  while (school.food >= required + (school.level - 1) * 6) {
+    school.food -= required + (school.level - 1) * 6;
+    school.level += 1;
+    school.population += schoolId === "reef" ? 5 : 7;
+    schoolLevelGained = true;
+  }
+  next.schools = { ...next.schools, [schoolId]: school };
+  next.bankedFood += foodDelivered;
   next.salvage += run.salvage;
   next.xp += earnedXp;
   next.successfulRuns += 1;
-  next.reefLevel = Math.min(3, Math.floor(next.bankedFood / 18));
+  next.reefLevel = next.schools.reef.level;
   let levelGained = false;
   while (next.xp >= xpForLevel(next.level)) {
     next.xp -= xpForLevel(next.level);
     next.level += 1;
     levelGained = true;
   }
-  return { save: next, earnedXp, levelGained };
+  return { save: next, earnedXp, levelGained, foodDelivered, schoolLevelGained, schoolId };
 }

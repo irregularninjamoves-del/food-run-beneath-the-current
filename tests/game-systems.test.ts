@@ -38,8 +38,8 @@ test("endless chunk manager recycles distant sections", () => {
 });
 
 test("bag upgrades and level requirements scale predictably", () => {
-  assert.equal(getBagCapacity(STARTER_SAVE), 8);
-  assert.equal(getBagCapacity({ ...STARTER_SAVE, bagLevel: 2 }), 16);
+  assert.equal(getBagCapacity(STARTER_SAVE), 6);
+  assert.equal(getBagCapacity({ ...STARTER_SAVE, bagLevel: 2 }), 14);
   assert.equal(xpForLevel(1), 80);
   assert.ok(xpForLevel(5) > xpForLevel(2));
 });
@@ -95,5 +95,6 @@ test("level seven grants three real noncombat talent points", () => {
   assert.equal(talentPointsForLevel(5), 2);
   assert.equal(talentPointsForLevel(7), 3);
   assert.ok(TALENTS.every((talent) => !talent.name.toLowerCase().includes("weapon")));
-  assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 10);
+  assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 8);
+  assert.equal(getBagCapacity({ ...STARTER_SAVE, fishType: "forager" }), 11);
 });
