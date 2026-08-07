@@ -3,17 +3,28 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   bankRunProgress,
+  DEEP_SCHOOL,
   FISH_TYPES,
   getBagCapacity,
+  getBurstDrainMultiplier,
+  getDecoyCount,
+  getMaxHealth,
+  getMaxStamina,
+  getRareFoodBonus,
+  getSonarCooldown,
   Phase,
   RunStats,
   SaveData,
-  STARTER_SAVE,
+  schoolFoodGoal,
+  SCHOOL_PERKS,
   SCHOOLS,
   SchoolId,
+  STARTER_SAVE,
   TUTORIAL_STEPS,
   WORLD,
   xpForLevel,
+  ZoneId,
+  zoneForX,
 } from "./model";
 import { loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
@@ -22,6 +33,8 @@ import { ENEMY_ARCHETYPES, EnemyKind, TIER_COLORS } from "./enemies";
 import { hasTalent, TALENTS, TalentId, talentPointsForLevel } from "./talents";
 
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; size: number; kind: "bubble" | "spark" };
+type Floater = { x: number; y: number; text: string; color: string; life: number };
+type DeliveryReport = { schoolId: SchoolId; foodDelivered: number; schoolLevelGained: boolean; population: number; schoolLevel: number };
 
 interface Runtime {
   phase: Phase;
@@ -53,6 +66,9 @@ interface Runtime {
   tutorialFlags: { moved: boolean; burst: boolean; hid: boolean; chased: boolean; escaped: boolean; whale: boolean; junk: boolean };
   whale: { x: number; y: number; helped: boolean };
   particles: Particle[];
+  floaters: Floater[];
+  zoneId: ZoneId;
+  lastDelivery: DeliveryReport | null;
   scannerCooldown: number;
   scannerPulse: number;
   traps: number;
@@ -70,7 +86,9 @@ interface UiSnapshot {
   paused: boolean;
   inventory: boolean;
   health: number;
+  maxHealth: number;
   stamina: number;
+  maxStamina: number;
   hidden: boolean;
   stealth: string;
   threat: string;
@@ -82,12 +100,14 @@ interface UiSnapshot {
   scannerCooldown: number;
   traps: number;
   notice: string;
+  zoneName: string;
   nearHome: boolean;
   nearCover: boolean;
   nearWhale: boolean;
   nearDeepSchool: boolean;
   resultXp: number;
   levelGained: boolean;
+  lastDelivery: DeliveryReport | null;
 }
 
 const emptyRun = (): RunStats => ({
@@ -115,8 +135,8 @@ function freshRuntime(save: SaveData): Runtime {
       vx: 0,
       vy: 0,
       facing: 1,
-      health: 3,
-      stamina: 100,
+      health: getMaxHealth(save),
+      stamina: getMaxStamina(save),
       staminaDelay: 0,
       hidden: false,
       coverId: null,
@@ -134,9 +154,12 @@ function freshRuntime(save: SaveData): Runtime {
     tutorialFlags: { moved: false, burst: false, hid: false, chased: false, escaped: false, whale: false, junk: false },
     whale: { x: save.tutorialComplete ? 1750 : 1180, y: 260, helped: false },
     particles: [],
+    floaters: [],
+    zoneId: "reef",
+    lastDelivery: null,
     scannerCooldown: 0,
     scannerPulse: 0,
-    traps: 2,
+    traps: getDecoyCount(save),
     decoy: null,
     shake: 0,
     notice: "",
@@ -460,10 +483,10 @@ export default function FoodRunGame() {
   const [ui, setUi] = useState<UiSnapshot>(() => {
     const save = STARTER_SAVE;
     return {
-      phase: "title", paused: false, inventory: false, health: 3, stamina: 100, hidden: false,
+      phase: "title", paused: false, inventory: false, health: 3, maxHealth: 3, stamina: 100, maxStamina: 100, hidden: false,
       stealth: "CLEAR", threat: "NO CONTACT", bagUsed: 0, bagCapacity: getBagCapacity(save), run: emptyRun(), save,
-      tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", nearHome: true,
-      nearCover: false, nearWhale: false, resultXp: 0, levelGained: false,
+      tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", zoneName: "Shallow Reef", nearHome: true,
+      nearCover: false, nearWhale: false, nearDeepSchool: false, resultXp: 0, levelGained: false, lastDelivery: null,
     };
   });
 
@@ -490,7 +513,9 @@ export default function FoodRunGame() {
       paused: g.paused,
       inventory: g.inventory,
       health: g.player.health,
+      maxHealth: getMaxHealth(g.save),
       stamina: g.player.stamina,
+      maxStamina: getMaxStamina(g.save),
       hidden: g.player.hidden,
       stealth,
       threat,
@@ -502,12 +527,14 @@ export default function FoodRunGame() {
       scannerCooldown: g.scannerCooldown,
       traps: g.traps,
       notice: g.notice,
+      zoneName: zoneForX(g.player.x).name,
       nearHome: g.player.x < 315,
       nearCover,
       nearWhale: !g.whale.helped && distance(g.player.x, g.player.y, g.whale.x, g.whale.y) < 150,
-      nearDeepSchool: distance(g.player.x, g.player.y, 2450, 390) < 150,
+      nearDeepSchool: distance(g.player.x, g.player.y, DEEP_SCHOOL.x, DEEP_SCHOOL.y) < 160,
       resultXp: g.resultXp,
       levelGained: g.levelGained,
+      lastDelivery: g.lastDelivery,
     });
   }, []);
 
@@ -526,14 +553,16 @@ export default function FoodRunGame() {
     g.phase = "playing";
     g.paused = false;
     g.inventory = false;
-    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: 3, stamina: 100, staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0, hazardCooldown: 0 };
+    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: getMaxHealth(g.save), stamina: getMaxStamina(g.save), staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0, hazardCooldown: 0 };
     g.cameraX = 0;
     g.elapsed = 0;
     g.run = emptyRun();
     g.bagUsed = 0;
+    g.floaters = [];
+    g.zoneId = "reef";
     g.scannerCooldown = 0;
     g.scannerPulse = 0;
-    g.traps = 2;
+    g.traps = getDecoyCount(g.save);
     g.decoy = null;
     g.whale = { x: g.save.tutorialComplete ? 1750 : 1180, y: 260, helped: false };
     g.tutorialStep = g.save.tutorialComplete ? TUTORIAL_STEPS.length : 0;
@@ -556,14 +585,24 @@ export default function FoodRunGame() {
     syncUi(g);
   }, [syncUi]);
 
-  const bankRun = useCallback((g: Runtime) => {
-    const banked = bankRunProgress(g.save, g.run);
+  const bankRun = useCallback((g: Runtime, schoolId: SchoolId) => {
+    const banked = bankRunProgress(g.save, g.run, schoolId);
     const next = banked.save;
     g.levelGained = banked.levelGained;
     if (!next.tutorialComplete && g.tutorialStep >= TUTORIAL_STEPS.length - 1) next.tutorialComplete = true;
     g.save = next;
     g.resultXp = banked.earnedXp;
-    showNotice(g, `${banked.foodDelivered} food fed to ${SCHOOLS[banked.schoolId].name}${banked.schoolLevelGained ? " — school grew!" : ""}`, 3);
+    g.lastDelivery = {
+      schoolId,
+      foodDelivered: banked.foodDelivered,
+      schoolLevelGained: banked.schoolLevelGained,
+      population: next.schools[schoolId].population,
+      schoolLevel: next.schools[schoolId].level,
+    };
+    for (let i = 0; i < 26; i++) {
+      g.particles.push({ x: g.player.x, y: g.player.y, vx: (Math.random() - 0.5) * 190, vy: (Math.random() - 0.7) * 160, life: 0.7 + Math.random() * 0.7, size: 2 + Math.random() * 4, kind: "spark" });
+    }
+    showNotice(g, `${banked.foodDelivered} food fed to ${SCHOOLS[schoolId].name}${banked.schoolLevelGained ? " — the school grew!" : ""}`, 3);
     g.phase = "results";
     g.paused = false;
     g.inventory = false;
@@ -578,14 +617,6 @@ export default function FoodRunGame() {
     const g = runtimeRef.current;
     if (!g) return;
     g.save = { ...g.save, fishType };
-    persistSave(g.save);
-    syncUi(g);
-  }, [syncUi]);
-
-  const chooseSchool = useCallback((schoolId: SchoolId) => {
-    const g = runtimeRef.current;
-    if (!g) return;
-    g.save = { ...g.save, selectedSchool: schoolId };
     persistSave(g.save);
     syncUi(g);
   }, [syncUi]);
@@ -691,22 +722,20 @@ export default function FoodRunGame() {
     };
 
     const interact = () => {
-      const atDeepSchool = distance(g.player.x, g.player.y, 2450, 390) < 150;
+      const atDeepSchool = distance(g.player.x, g.player.y, DEEP_SCHOOL.x, DEEP_SCHOOL.y) < 160;
       if (atDeepSchool) {
-        if (g.save.selectedSchool !== "deep") showNotice(g, "This haul is pledged to Sunbeam Shoal. Choose Midnight Shoal before your next dive.", 2.6);
-        else if (g.run.food + g.run.salvage <= 0) showNotice(g, "Midnight Shoal needs food, not an empty current.");
-        else bankRun(g);
+        if (g.run.food + g.run.salvage <= 0) showNotice(g, "Midnight Shoal needs food, not an empty current.");
+        else bankRun(g, "deep");
         return;
       }
       if (g.player.x < 315) {
-        if (g.save.selectedSchool !== "reef") showNotice(g, "Your haul is pledged to Midnight Shoal in deep water.", 2.4);
-        else if (g.run.food + g.run.salvage <= 0) showNotice(g, "Your bag is empty. The school needs food.");
+        if (g.run.food + g.run.salvage <= 0) showNotice(g, "Your bag is empty. The school needs food.");
         else if (!g.save.tutorialComplete && (g.tutorialStep < TUTORIAL_STEPS.length - 1 || g.run.food <= 0)) {
           showNotice(g, "Finish the training route before extracting your haul.", 2.2);
         }
         else {
           if (!g.save.tutorialComplete) g.tutorialStep = TUTORIAL_STEPS.length;
-          bankRun(g);
+          bankRun(g, "reef");
         }
         return;
       }
@@ -759,6 +788,17 @@ export default function FoodRunGame() {
         g.decoy.life -= dt;
         if (g.decoy.life <= 0) g.decoy = null;
       }
+      for (const floater of g.floaters) {
+        floater.y -= 30 * dt;
+        floater.life -= dt;
+      }
+      g.floaters = g.floaters.filter((floater) => floater.life > 0).slice(-24);
+      const zone = zoneForX(g.player.x);
+      if (zone.id !== g.zoneId) {
+        const enteringDeeper = zone.startX > (g.zoneId === "reef" ? 0 : g.zoneId === "kelp" ? 2700 : 5400);
+        g.zoneId = zone.id;
+        if (enteringDeeper) showNotice(g, `${zone.name.toUpperCase()} — ${zone.hint}.`, 3);
+      }
 
       while (actionQueue.current.length) {
         const action = actionQueue.current.shift();
@@ -766,7 +806,7 @@ export default function FoodRunGame() {
         if (action === "f") {
           if (g.scannerCooldown > 0) showNotice(g, `Scanner recharging: ${Math.ceil(g.scannerCooldown)}s`, 1.1);
           else {
-            g.scannerCooldown = 8;
+            g.scannerCooldown = getSonarCooldown(g.save);
             g.scannerPulse = 1;
             showNotice(g, "Sonar: solid ring is sight; dashed ring is hearing. Your pulse is noisy.", 2.5);
             audioCue("sonar", g.save.settings.sound);
@@ -806,8 +846,9 @@ export default function FoodRunGame() {
       const loadRatio = g.bagUsed / getBagCapacity(g.save);
       const loadPenalty = 1 - Math.max(0, loadRatio - 0.6) * 0.18;
       const fish = FISH_TYPES[g.save.fishType];
-      const accel = (wantsBurst ? 520 : 245) * loadPenalty * fish.speed;
-      const maxSpeed = (wantsBurst ? 295 : 142) * loadPenalty * fish.speed;
+      const talentSpeed = hasTalent(g.save.unlockedTalents, "current-rider") ? 1.08 : 1;
+      const accel = (wantsBurst ? 530 : 262) * loadPenalty * fish.speed * talentSpeed;
+      const maxSpeed = (wantsBurst ? 300 : 150) * loadPenalty * fish.speed * talentSpeed;
       if (moving) {
         g.player.vx += (inputX / inputLength) * accel * inputStrength * dt;
         g.player.vy += (inputY / inputLength) * accel * inputStrength * dt;
@@ -825,17 +866,18 @@ export default function FoodRunGame() {
         g.player.vy = (g.player.vy / speed) * maxSpeed;
       }
       if (wantsBurst) {
-        g.player.stamina = Math.max(0, g.player.stamina - 34 * dt * (1 + loadRatio * 0.16));
+        g.player.stamina = Math.max(0, g.player.stamina - 34 * dt * (1 + loadRatio * 0.16) * fish.burstCost * getBurstDrainMultiplier(g.save));
         g.player.staminaDelay = 0.9;
         g.tutorialFlags.burst = true;
         if (Math.random() < dt * 22) g.particles.push({ x: g.player.x - g.player.facing * 22, y: g.player.y + (Math.random() - 0.5) * 18, vx: -g.player.facing * (45 + Math.random() * 30), vy: -14 - Math.random() * 18, life: 0.8, size: 2 + Math.random() * 4, kind: "bubble" });
       } else {
         g.player.staminaDelay -= dt;
-        if (g.player.staminaDelay <= 0) g.player.stamina = Math.min(100, g.player.stamina + 22 * dt);
+        if (g.player.staminaDelay <= 0) g.player.stamina = Math.min(getMaxStamina(g.save), g.player.stamina + 22 * fish.staminaRegen * dt);
       }
 
       const playerChunk = g.chunks.chunks.get(Math.floor(g.player.x / WORLD.chunkWidth));
-      if (playerChunk) g.player.vx += playerChunk.current * dt * (wantsBurst ? 0.35 : 1);
+      const currentResist = hasTalent(g.save.unlockedTalents, "tide-dancer") ? 0.55 : 1;
+      if (playerChunk) g.player.vx += playerChunk.current * dt * (wantsBurst ? 0.35 : 1) * currentResist;
       g.player.x = Math.max(105, g.player.x + g.player.vx * dt);
       g.player.y = clamp(g.player.y + g.player.vy * dt, WORLD.surfaceY + 35, WORLD.floorY - 25);
       g.run.distance = Math.max(g.run.distance, Math.max(0, g.player.x - 225));
@@ -906,7 +948,7 @@ export default function FoodRunGame() {
         }
 
         for (const pickup of chunk.pickups) {
-          if (pickup.collected || distance(g.player.x, g.player.y, pickup.x, pickup.y) > 30) continue;
+          if (pickup.collected || distance(g.player.x, g.player.y, pickup.x, pickup.y) > FISH_TYPES[g.save.fishType].gatherRadius) continue;
           if (g.bagUsed + pickup.size > getBagCapacity(g.save)) {
             if (g.notice !== "Bag full — return home or leave something behind.") showNotice(g, "Bag full — return home or leave something behind.", 1.8);
             continue;
@@ -915,7 +957,9 @@ export default function FoodRunGame() {
           g.bagUsed += pickup.size;
           if (pickup.kind === "food") {
             const keenFind = hasTalent(g.save.unlockedTalents, "keen-current") && !pickup.rare && Math.random() < 0.12;
-            g.run.food += pickup.value + (keenFind ? 2 : 0);
+            const gained = pickup.value + (pickup.rare ? getRareFoodBonus(g.save) : 0) + (keenFind ? 2 : 0);
+            g.run.food += gained;
+            g.floaters.push({ x: pickup.x, y: pickup.y - 14, text: `+${gained} FOOD`, color: pickup.rare ? "#8dffe6" : "#ffd75f", life: 1.1 });
             if (keenFind) {
               g.run.rareDiscoveries += 1;
               showNotice(g, "Keen Current found a richer food cluster.", 1.6);
@@ -924,9 +968,10 @@ export default function FoodRunGame() {
           else {
             g.run.salvage += pickup.value;
             g.tutorialFlags.junk = true;
+            g.floaters.push({ x: pickup.x, y: pickup.y - 14, text: `+${pickup.value} SALVAGE`, color: "#73d9e3", life: 1.1 });
           }
           if (pickup.rare) g.run.rareDiscoveries += 1;
-          for (let i = 0; i < 7; i++) g.particles.push({ x: pickup.x, y: pickup.y, vx: (Math.random() - 0.5) * 90, vy: (Math.random() - 0.5) * 80, life: 0.5 + Math.random() * 0.4, size: 2 + Math.random() * 3, kind: "spark" });
+          for (let i = 0; i < (pickup.rare ? 13 : 7); i++) g.particles.push({ x: pickup.x, y: pickup.y, vx: (Math.random() - 0.5) * 90, vy: (Math.random() - 0.5) * 80, life: 0.5 + Math.random() * 0.4, size: 2 + Math.random() * 3, kind: "spark" });
           audioCue("pickup", g.save.settings.sound);
         }
 
@@ -944,8 +989,8 @@ export default function FoodRunGame() {
           const sonarNoise = g.scannerPulse > 0.7 && dist < enemy.sonarRadius;
           const currentVision = enemy.visionRadius * (playerSpeed > 180 ? 1.28 : 1) * (hasTalent(g.save.unlockedTalents, "shadow-skin") ? 0.82 : 1);
           const sees = !g.player.hidden && dist < currentVision && (inFront || dist < enemy.visionRadius * 0.38);
-          const safeAtReef = g.player.x < 500;
-          const detects = !safeAtReef && (sees || burstNoise || sonarNoise);
+          const inSchoolSafety = g.player.x < 500 || Math.abs(g.player.x - DEEP_SCHOOL.x) < 240;
+          const detects = !inSchoolSafety && (sees || burstNoise || sonarNoise);
           if (enemy.tier === "boss" && dist < 1000 && !shark.warned) {
             shark.warned = true;
             showNotice(g, "COLOSSAL SHADOW — its awareness reaches far. Sonar reveals the radii.", 4.2);
@@ -1041,9 +1086,11 @@ export default function FoodRunGame() {
               g.player.vx = dx > 0 ? 190 : -190;
               g.player.vy = dy > 0 ? 100 : -100;
               g.shake = g.save.settings.reducedMotion ? 2 : 10;
-              if (g.run.food > 0) {
-                g.run.food -= 1;
-                g.bagUsed = Math.max(0, g.bagUsed - 1);
+              const foodLost = Math.min(g.run.food, enemy.damage);
+              if (foodLost > 0) {
+                g.run.food -= foodLost;
+                g.bagUsed = Math.max(0, g.bagUsed - foodLost);
+                g.floaters.push({ x: g.player.x, y: g.player.y - 30, text: `-${foodLost} FOOD`, color: "#ff8092", life: 1.2 });
               }
               showNotice(g, "Struck! Some food scattered into the current.", 2.4);
               audioCue("hurt", g.save.settings.sound);
@@ -1159,22 +1206,37 @@ export default function FoodRunGame() {
         ctx.font = "800 12px var(--font-mono), monospace";
         ctx.textAlign = "center";
         ctx.fillText("HOME REEF", hx + 120, 455);
-        for (let i = 0; i < 5 + g.save.reefLevel * 2; i++) {
+        for (let i = 0; i < Math.min(21, 5 + g.save.reefLevel * 2); i++) {
           drawFish(ctx, hx + 75 + (i % 4) * 38, 500 + Math.floor(i / 4) * 40 + Math.sin(g.elapsed + i) * 7, i % 2 ? -1 : 1, 0, false, false);
         }
+        if (g.run.food > 0 && g.player.x < 560) {
+          ctx.strokeStyle = `rgba(255,214,110,${0.3 + Math.sin(g.elapsed * 3) * 0.18})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(hx + 120, 540, 175 + Math.sin(g.elapsed * 3) * 8, 0, Math.PI * 2);
+          ctx.stroke();
+        }
 
-        const deepX = 2450 - g.cameraX;
+        const deepX = DEEP_SCHOOL.x - g.cameraX;
         if (deepX > -240 && deepX < width + 240) {
           const deepSchool = g.save.schools.deep;
           ctx.save();
           ctx.fillStyle = "rgba(14,54,92,.7)";
           ctx.beginPath(); ctx.ellipse(deepX, 470, 170, 100, 0, 0, Math.PI * 2); ctx.fill();
+          if (g.run.food > 0 && Math.abs(g.player.x - DEEP_SCHOOL.x) < 320) {
+            ctx.strokeStyle = `rgba(120,215,202,${0.35 + Math.sin(g.elapsed * 3) * 0.2})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(deepX, DEEP_SCHOOL.y, 150 + Math.sin(g.elapsed * 3) * 8, 0, Math.PI * 2);
+            ctx.stroke();
+          }
           ctx.fillStyle = "#78d7ca";
           ctx.font = "700 12px monospace";
-          ctx.fillText("MIDNIGHT SHOAL", deepX - 56, 285);
-          for (let i = 0; i < 4 + deepSchool.population; i++) {
+          ctx.textAlign = "center";
+          ctx.fillText(`MIDNIGHT SHOAL · LV ${deepSchool.level}`, deepX, 285);
+          for (let i = 0; i < Math.min(26, 4 + deepSchool.population); i++) {
             const orbit = g.elapsed * 0.8 + i * 0.7;
-            drawFish(ctx, deepX + Math.cos(orbit) * (62 + (i % 3) * 14), 390 + Math.sin(orbit * 1.4) * (38 + (i % 2) * 13), i % 2 ? -1 : 1, 0, false, false);
+            drawFish(ctx, deepX + Math.cos(orbit) * (62 + (i % 3) * 14), DEEP_SCHOOL.y + Math.sin(orbit * 1.4) * (38 + (i % 2) * 13), i % 2 ? -1 : 1, 0, false, false);
           }
           ctx.restore();
         }
@@ -1215,8 +1277,28 @@ export default function FoodRunGame() {
           }
           for (const shark of chunk.sharks) {
             const x = shark.x - g.cameraX;
-            if (x < -100 || x > width + 100) continue;
+            if (x < -100 || x > width + 100) {
+              // Keen Eyes surfaces hunters beyond the screen edge as chevrons.
+              if (hasTalent(g.save.unlockedTalents, "keen-eyes") && Math.abs(shark.x - g.player.x) < 850) {
+                const edgeX = x < 0 ? 26 : width - 26;
+                const point = x < 0 ? -9 : 9;
+                ctx.fillStyle = TIER_COLORS[shark.tier];
+                ctx.beginPath();
+                ctx.moveTo(edgeX + point, shark.y);
+                ctx.lineTo(edgeX - point, shark.y - 8);
+                ctx.lineTo(edgeX - point, shark.y + 8);
+                ctx.closePath();
+                ctx.fill();
+              }
+              continue;
+            }
             const enemy = ENEMY_ARCHETYPES[shark.kind];
+            if (shark.alert > 0.18 && shark.state !== "CHASE") {
+              ctx.font = "900 15px var(--font-mono), monospace";
+              ctx.textAlign = "center";
+              ctx.fillStyle = shark.alert > 0.6 ? "#ff8092" : "#f8d45b";
+              ctx.fillText("!", x, shark.y - 46 - enemy.scale * 15);
+            }
             if (g.scannerPulse > 0) {
               const alpha = g.scannerPulse * 0.46;
               const shownVision = enemy.visionRadius * (hasTalent(g.save.unlockedTalents, "shadow-skin") ? 0.82 : 1);
@@ -1266,6 +1348,14 @@ export default function FoodRunGame() {
           ctx.arc(particle.x - g.cameraX, particle.y, particle.size, 0, Math.PI * 2);
           ctx.fill();
         }
+        ctx.font = "800 13px var(--font-mono), monospace";
+        ctx.textAlign = "center";
+        for (const floater of g.floaters) {
+          ctx.globalAlpha = clamp(floater.life, 0, 1);
+          ctx.fillStyle = floater.color;
+          ctx.fillText(floater.text, floater.x - g.cameraX, floater.y);
+        }
+        ctx.globalAlpha = 1;
         if ((held.current.has("shift") || held.current.has(" ")) && g.player.stamina > 0 && !g.save.settings.reducedMotion) {
           ctx.strokeStyle = "rgba(208,250,255,.35)";
           ctx.lineWidth = 2;
@@ -1414,8 +1504,6 @@ export default function FoodRunGame() {
   };
 
   const bagCost = 4 + ui.save.bagLevel * 5;
-  const activeSchool = ui.save.schools[ui.save.selectedSchool];
-  const activeSchoolGoal = SCHOOLS[ui.save.selectedSchool].requiredBase + (activeSchool.level - 1) * 16;
   const dayProgress = (ui.run.duration % WORLD.dayLength) / WORLD.dayLength;
   const period = dayProgress < 0.43 ? "DAY" : dayProgress < 0.57 ? "SUNSET" : dayProgress < 0.93 ? "NIGHT" : "DAWN";
   const xpTarget = xpForLevel(ui.save.level);
@@ -1435,9 +1523,9 @@ export default function FoodRunGame() {
             <section className="hud-cluster condition-cluster">
               <div className="eyebrow">CONDITION</div>
               <div className="hearts" aria-label={`${ui.health} health remaining`}>
-                {[0, 1, 2].map((heart) => <span key={heart} className={heart < ui.health ? "full" : "empty"}>◆</span>)}
+                {Array.from({ length: ui.maxHealth }, (_, heart) => <span key={heart} className={heart < ui.health ? "full" : "empty"}>◆</span>)}
               </div>
-              <div className="meter compact"><i style={{ width: `${ui.stamina}%` }} /></div>
+              <div className="meter compact"><i style={{ width: `${(ui.stamina / ui.maxStamina) * 100}%` }} /></div>
               <div className="meter-label"><span>STAMINA</span><b>{Math.round(ui.stamina)}</b></div>
             </section>
             <section className="hud-cluster center-cluster">
@@ -1455,11 +1543,11 @@ export default function FoodRunGame() {
 
           <aside className="mission-card">
             <div className="eyebrow">{ui.save.tutorialComplete ? "EXPEDITION" : `TRAINING ${Math.min(ui.tutorialStep + 1, TUTORIAL_STEPS.length)}/${TUTORIAL_STEPS.length}`}</div>
-            <strong>{ui.save.tutorialComplete ? `${SCHOOLS[ui.save.selectedSchool].name}: ${activeSchool.food}/${activeSchoolGoal} food · ${ui.run.food >= 5 ? "haul is ready" : "gather food"}` : TUTORIAL_STEPS[Math.min(ui.tutorialStep, TUTORIAL_STEPS.length - 1)]}</strong>
+            <strong>{ui.save.tutorialComplete ? (ui.run.food > 0 ? "Deliver: Sunbeam Shoal home, or Midnight Shoal far east" : "Gather food — richer water lies east") : TUTORIAL_STEPS[Math.min(ui.tutorialStep, TUTORIAL_STEPS.length - 1)]}</strong>
             {!ui.save.tutorialComplete && <div className="step-track"><i style={{ width: `${((ui.tutorialStep + 1) / TUTORIAL_STEPS.length) * 100}%` }} /></div>}
           </aside>
 
-          <div className="run-meta"><span>{period}</span><span>LV {ui.save.level}</span><span>SONAR {ui.scannerCooldown > 0 ? `${Math.ceil(ui.scannerCooldown)}s` : "READY"}</span></div>
+          <div className="run-meta"><span>{ui.zoneName.toUpperCase()}</span><span>{period}</span><span>LV {ui.save.level}</span><span>SONAR {ui.scannerCooldown > 0 ? `${Math.ceil(ui.scannerCooldown)}s` : "READY"}</span></div>
 
           {(ui.nearHome || ui.nearDeepSchool || ui.nearCover || ui.nearWhale) && !ui.paused && !ui.inventory && (
             <div className="action-prompt"><kbd>E</kbd><span>{ui.nearHome ? "FEED SUNBEAM SHOAL" : ui.nearDeepSchool ? "FEED MIDNIGHT SHOAL" : ui.nearWhale ? "ANSWER WHALE SONG" : ui.hidden ? "LEAVE COVER" : "HIDE IN SEAWEED"}</span></div>
@@ -1510,14 +1598,20 @@ export default function FoodRunGame() {
             <div><div className="eyebrow">SAFE WATER · HOME REEF</div><h2>The school is waiting.</h2><p>Choose your gear, then bring everyone a little more hope.</p></div>
             <div className="level-medallion"><span>LEVEL</span><b>{ui.save.level}</b><small>{ui.save.xp}/{xpTarget} XP</small></div>
           </div>
-          <div className="school-choice-grid" aria-label="Choose a school to support">
+          <div className="school-choice-grid" aria-label="School progress">
             {(Object.keys(SCHOOLS) as SchoolId[]).map((schoolId) => {
               const school = ui.save.schools[schoolId];
-              const goal = SCHOOLS[schoolId].requiredBase + (school.level - 1) * 16;
-              const selected = ui.save.selectedSchool === schoolId;
-              return <button key={schoolId} className={`school-choice ${selected ? "selected" : ""}`} onClick={() => chooseSchool(schoolId)}>
-                <span className="eyebrow">{SCHOOLS[schoolId].location}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
-              </button>;
+              const goal = schoolFoodGoal(schoolId, school.level);
+              return <div key={schoolId} className="school-choice static">
+                <span className="eyebrow">{SCHOOLS[schoolId].location}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
+                <span className="school-perks">
+                  {SCHOOL_PERKS[schoolId].map((perk) => (
+                    <span key={perk.name} className={school.level >= perk.level ? "on" : ""}>
+                      {school.level >= perk.level ? "✓" : `LV${perk.level}`} {perk.name} — {perk.description}
+                    </span>
+                  ))}
+                </span>
+              </div>;
             })}
           </div>
           <div className="fish-choice-row" aria-label="Choose fish type">
@@ -1552,7 +1646,7 @@ export default function FoodRunGame() {
                       disabled={!available}
                       aria-label={`${talent.name}: ${unlocked ? "unlocked" : available ? "unlock" : `locked until level ${talent.level}`}`}
                     >
-                      <span className="talent-symbol">{talent.branch === "stealth" ? "◌" : "◇"}</span>
+                      <span className="talent-symbol">{talent.branch === "stealth" ? "◌" : talent.branch === "voyage" ? "≈" : "◇"}</span>
                       <span><b>{talent.name}</b><small>{talent.description} · LV {talent.level}</small></span>
                       <em>{unlocked ? "✓" : available ? "+" : prerequisiteMet ? `LV${talent.level}` : "CHAIN"}</em>
                     </button>
@@ -1599,14 +1693,19 @@ export default function FoodRunGame() {
 
       {ui.phase === "results" && (
         <section className="screen-overlay result-screen">
-          <div className="result-mark">✓</div><div className="eyebrow">SAFE RETURN</div><h2>The reef eats tonight.</h2>
-          <p>Every trip clears the water and makes the school stronger.</p>
+          <div className="result-mark">✓</div><div className="eyebrow">SAFE RETURN</div>
+          <h2>{ui.lastDelivery ? `${SCHOOLS[ui.lastDelivery.schoolId].name} eats tonight.` : "The reef eats tonight."}</h2>
+          <p>{ui.lastDelivery ? `${ui.lastDelivery.population} fish now swim at LV ${ui.lastDelivery.schoolLevel}. Every trip makes the school stronger.` : "Every trip clears the water and makes the school stronger."}</p>
           <div className="result-grid">
-            <div><span>FOOD BANKED</span><b>{ui.run.food}</b></div><div><span>SALVAGE</span><b>{ui.run.salvage}</b></div><div><span>FARTHEST DISTANCE</span><b>{Math.round(ui.run.distance / 10)}m</b></div><div><span>XP EARNED</span><b>+{ui.resultXp}</b></div>
+            <div><span>FOOD DELIVERED</span><b>{ui.lastDelivery ? ui.lastDelivery.foodDelivered : ui.run.food}</b></div><div><span>SALVAGE</span><b>{ui.run.salvage}</b></div><div><span>FARTHEST DISTANCE</span><b>{Math.round(ui.run.distance / 10)}m</b></div><div><span>XP EARNED</span><b>+{ui.resultXp}</b></div>
           </div>
+          {ui.lastDelivery?.schoolLevelGained && <div className="level-up">THE SCHOOL GREW · NEW FISH ARRIVE · CHECK ITS PERKS</div>}
           {ui.levelGained && <div className="level-up">LEVEL UP · NEW CURRENTS AWAIT</div>}
           {!ui.save.tutorialComplete && <div className="level-up">TRAINING COMPLETE · CRAFT YOUR FIRST BAG UPGRADE</div>}
-          <button className="primary-button large" onClick={goHome}>RETURN TO REEF <span>→</span></button>
+          <div className="result-actions">
+            <button className="primary-button large" onClick={beginExpedition}>DIVE AGAIN <span>→</span></button>
+            <button className="secondary-button" onClick={goHome}>RETURN TO REEF</button>
+          </div>
         </section>
       )}
 

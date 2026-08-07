@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bankRunProgress, getBagCapacity, STARTER_SAVE, WORLD, xpForLevel } from "../app/game/model";
+import {
+  bankRunProgress,
+  DEEP_SCHOOL,
+  getBagCapacity,
+  getDecoyCount,
+  getMaxHealth,
+  getMaxStamina,
+  getRareFoodBonus,
+  getSonarCooldown,
+  STARTER_SAVE,
+  WORLD,
+  xpForLevel,
+  zoneForChunk,
+  zoneForX,
+} from "../app/game/model";
 import { ChunkManager, createChunk } from "../app/game/world";
 import { ENEMY_ARCHETYPES } from "../app/game/enemies";
 import { TALENTS, talentPointsForLevel } from "../app/game/talents";
@@ -16,6 +30,7 @@ test("generated routes always provide cover, rewards, and legal bounds", () => {
     assert.ok(chunk.covers.length >= 2, `chunk ${index} has no safe cover rhythm`);
     assert.ok(chunk.pickups.length >= 10, `chunk ${index} has too few rewards`);
     assert.ok(chunk.pickups.every((pickup) => pickup.y > WORLD.surfaceY && pickup.y < WORLD.floorY));
+    assert.ok(chunk.pickups.every((pickup) => pickup.x >= index * WORLD.chunkWidth && pickup.x <= (index + 1) * WORLD.chunkWidth));
     assert.ok(chunk.sharks.every((shark) => shark.y > WORLD.surfaceY && shark.y < WORLD.floorY));
   }
 });
@@ -37,6 +52,38 @@ test("endless chunk manager recycles distant sections", () => {
   assert.ok(distantIndexes.length <= 8, "active chunks should remain bounded");
 });
 
+test("ocean zones progress from reef to kelp to deep water", () => {
+  assert.equal(zoneForX(0).id, "reef");
+  assert.equal(zoneForX(3000).id, "kelp");
+  assert.equal(zoneForX(6000).id, "deep");
+  assert.equal(zoneForChunk(0).id, "reef");
+  assert.equal(zoneForChunk(4).id, "kelp");
+  assert.equal(zoneForChunk(7).id, "deep");
+  assert.equal(zoneForX(DEEP_SCHOOL.x).id, "deep", "Midnight Shoal must live in deep water");
+});
+
+test("deeper zones yield more valuable food on average", () => {
+  const averageFoodValue = (indexes: number[]) => {
+    let total = 0;
+    let count = 0;
+    for (const index of indexes) {
+      for (const seed of [11, 222, 3333, 44444, 55555]) {
+        for (const pickup of createChunk(index, seed).pickups) {
+          if (pickup.kind !== "food") continue;
+          total += pickup.value;
+          count += 1;
+        }
+      }
+    }
+    return total / count;
+  };
+  const reef = averageFoodValue([1, 2]);
+  const kelp = averageFoodValue([3, 4, 5]);
+  const deep = averageFoodValue([7, 8, 9]);
+  assert.ok(reef < kelp, `kelp food (${kelp}) should beat reef food (${reef})`);
+  assert.ok(kelp < deep, `deep food (${deep}) should beat kelp food (${kelp})`);
+});
+
 test("bag upgrades and level requirements scale predictably", () => {
   assert.equal(getBagCapacity(STARTER_SAVE), 6);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, bagLevel: 2 }), 14);
@@ -44,16 +91,42 @@ test("bag upgrades and level requirements scale predictably", () => {
   assert.ok(xpForLevel(5) > xpForLevel(2));
 });
 
-test("extraction banks the haul and defeat leaves permanent stores unchanged", () => {
+test("extraction banks the haul into the chosen school", () => {
   const run = { food: 8, salvage: 4, distance: 1200, predatorsEscaped: 1, creaturesHelped: 1, rareDiscoveries: 0, duration: 80 };
   const before = structuredClone(STARTER_SAVE);
-  const result = bankRunProgress(before, run);
+  const result = bankRunProgress(before, run, "reef");
   assert.equal(result.save.bankedFood, 8);
   assert.equal(result.save.salvage, 4);
   assert.ok(result.earnedXp > 0);
   assert.equal(before.bankedFood, 0, "banking must not mutate the previous save");
-  const afterDefeat = { ...before };
-  assert.deepEqual(afterDefeat, before, "defeat must not bank unprotected run resources");
+  const deepResult = bankRunProgress(before, run, "deep");
+  assert.ok(deepResult.save.schools.deep.food > 0 || deepResult.save.schools.deep.level > 1, "deep deliveries must feed the deep school");
+  assert.equal(deepResult.save.schools.reef.food, 0, "deep deliveries must not feed the reef school");
+});
+
+test("the forager fish delivers bonus food on heavy hauls", () => {
+  const run = { food: 8, salvage: 0, distance: 500, predatorsEscaped: 0, creaturesHelped: 0, rareDiscoveries: 0, duration: 60 };
+  const swift = bankRunProgress({ ...structuredClone(STARTER_SAVE), fishType: "swift" }, run, "reef");
+  const forager = bankRunProgress({ ...structuredClone(STARTER_SAVE), fishType: "forager" }, run, "reef");
+  assert.equal(swift.foodDelivered, 8);
+  assert.equal(forager.foodDelivered, 10);
+});
+
+test("school levels unlock tangible perks", () => {
+  const base = structuredClone(STARTER_SAVE);
+  assert.equal(getMaxHealth(base), 3);
+  assert.equal(getMaxStamina(base), 100);
+  assert.equal(getDecoyCount(base), 2);
+  assert.equal(getSonarCooldown(base), 8);
+  assert.equal(getRareFoodBonus(base), 0);
+  const grown = structuredClone(STARTER_SAVE);
+  grown.schools.reef.level = 4;
+  grown.schools.deep.level = 3;
+  assert.equal(getMaxHealth(grown), 4);
+  assert.equal(getMaxStamina(grown), 115);
+  assert.equal(getDecoyCount(grown), 3);
+  assert.equal(getSonarCooldown(grown), 5);
+  assert.equal(getRareFoodBonus(grown), 1);
 });
 
 test("aggro radii scale from minion to lieutenant to boss", () => {
@@ -73,6 +146,16 @@ test("procedural distance tiers can generate all three enemy classes", () => {
   assert.deepEqual([...tiers].sort(), ["boss", "lieutenant", "minion"]);
 });
 
+test("bosses only prowl deep water", () => {
+  for (let index = 1; index < 120; index += 1) {
+    for (const seed of [7, 77, 777]) {
+      for (const enemy of createChunk(index, seed).sharks) {
+        if (enemy.tier === "boss") assert.equal(zoneForChunk(index).id, "deep", `boss found in ${zoneForChunk(index).id} chunk ${index}`);
+      }
+    }
+  }
+});
+
 test("obstacle chunks stay varied and always leave a passable route", () => {
   const kinds = new Set<string>();
   assert.equal(createChunk(0, 2211).hazards.length, 0, "home tutorial water must remain safe");
@@ -89,12 +172,14 @@ test("obstacle chunks stay varied and always leave a passable route", () => {
   assert.deepEqual([...kinds].sort(), ["jellyfish", "net", "vent"]);
 });
 
-test("level seven grants three real noncombat talent points", () => {
+test("talents cover stealth, gathering, and voyage play styles", () => {
   assert.equal(talentPointsForLevel(1), 0);
   assert.equal(talentPointsForLevel(3), 1);
   assert.equal(talentPointsForLevel(5), 2);
   assert.equal(talentPointsForLevel(7), 3);
   assert.ok(TALENTS.every((talent) => !talent.name.toLowerCase().includes("weapon")));
+  const branches = new Set(TALENTS.map((talent) => talent.branch));
+  assert.deepEqual([...branches].sort(), ["gathering", "stealth", "voyage"]);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 8);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, fishType: "forager" }), 11);
 });

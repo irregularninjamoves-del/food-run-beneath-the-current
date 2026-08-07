@@ -8,11 +8,16 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 
 - Momentum-based swimming and stamina-limited burst movement
 - Keyboard and responsive touch controls
-- Food, salvage, limited bag capacity, extraction, XP, and leveling
-- Spendable noncombat talent currents at levels 3, 5, 7, and beyond
-- Minion, lieutenant, and boss awareness radii
+- Three ocean zones — Shallow Reef, Kelp Forest, and Deep Water — with escalating danger and food value
+- Two playable fish: the Swift Fish (fast, quick recovery, light bag) and the Forager Fish (slow, wide reach, heavy hauls with bonus deliveries)
+- Two schools to feed: Sunbeam Shoal at the home reef and Midnight Shoal far out in deep water — deliver your haul to whichever you reach
+- School levels grow the population on screen and unlock real perks (extra decoys, stamina, hearts, richer rare food, faster sonar, cheaper bursts)
+- Common, uncommon, and rare food tiers; rare glowfruit clusters near predator territory
+- Spendable noncombat talents across stealth, gathering, and voyage currents
+- Minion, lieutenant, and boss awareness radii with readable alert warnings
 - Seaweed stealth, sonar, decoys, and whale assistance
 - Jellyfish, partial fishing nets, vents, currents, and day/night changes
+- Floating reward numbers and delivery celebrations
 - Deterministic procedural chunks with bounded recycling
 - Local saved progression
 - Looping reef, exploration, and danger music with one-shot creature effects
@@ -60,4 +65,4 @@ Phones and tablets receive an on-screen directional pad, BURST button, and inter
 
 ## Current prototype scope
 
-The prototype contains one primary coral biome and one bag-crafting line. Talents focus on stealth, extraction, carrying, and obstacle recovery. The design deliberately avoids weapons so the fish remains vulnerable throughout progression.
+The prototype proves one loop: explore → risk → collect → return → feed → grow → upgrade → explore farther. Two fish types and two schools are intentional; each system is built deep rather than wide. Talents focus on stealth, gathering, and voyaging — the design deliberately avoids weapons so the fish remains vulnerable throughout progression.
