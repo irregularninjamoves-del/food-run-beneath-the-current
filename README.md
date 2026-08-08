@@ -16,6 +16,10 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Spendable noncombat talents across stealth, gathering, voyage, and bubble-craft currents
 - Bubble decoys fire as projectiles that pop loudly where they land, luring minions and (briefly) lieutenants — never bosses
 - Choose exactly one bubble craft: Stun Pop, Slumber Mist, or a Guardian Illusion that scares minions
+- Hunters slowly wise up to repeated pops — smarter tiers stop falling for them sooner
+- Deep water hides glowing bubble pearls that refill a decoy and supercharge the next pop
+- Level-5 schools empower your craft: Sunbeam widens the pop, Midnight extends its effects
+- A two-step Reset Progress option on the title screen starts the journey over
 - Touch controls include sonar and decoy buttons alongside the thumbstick, burst, and interact
 - Minion, lieutenant, and boss awareness radii with readable alert warnings
 - Seaweed stealth, sonar, decoys, and whale assistance

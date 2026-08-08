@@ -84,6 +84,7 @@ export function createChunk(index: number, runSeed: number): Chunk {
       stunned: 0,
       sleeping: 0,
       feared: 0,
+      decoySavvy: 0,
     });
   }
 
@@ -117,6 +118,20 @@ export function createChunk(index: number, runSeed: number): Chunk {
       value: index === 0 && i === 0 ? 1 : value,
       collected: false,
       rare,
+    });
+  }
+
+  if (zone.id === "deep" && random() < 0.55) {
+    // Bubble pearls: deep-water treasures that recharge and supercharge the decoy.
+    pickups.push({
+      id: `p-${index}-pearl`,
+      x: start + 150 + random() * (WORLD.chunkWidth - 280),
+      y: WORLD.surfaceY + 110 + random() * (WORLD.floorY - WORLD.surfaceY - 220),
+      kind: "bubble",
+      subtype: "bubblepearl",
+      size: 0,
+      value: 1,
+      collected: false,
     });
   }
 

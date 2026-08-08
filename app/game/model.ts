@@ -11,7 +11,7 @@ export type PredatorState =
   | "LOST TARGET"
   | "RETURN";
 
-export type PickupKind = "food" | "junk";
+export type PickupKind = "food" | "junk" | "bubble";
 export type FishType = "swift" | "forager";
 export type SchoolId = "reef" | "deep";
 
@@ -58,11 +58,13 @@ export const SCHOOL_PERKS: Record<SchoolId, SchoolPerkDef[]> = {
     { level: 2, name: "Bubble Craft", description: "+1 bubble decoy every dive" },
     { level: 3, name: "Reef Vigor", description: "+15 maximum stamina" },
     { level: 4, name: "Guardian Bond", description: "+1 heart every dive" },
+    { level: 5, name: "Resonant Pop", description: "Bubble pops reach 40% farther" },
   ],
   deep: [
     { level: 2, name: "Glow Harvest", description: "Rare food is worth +1" },
     { level: 3, name: "Echo Tuning", description: "Sonar recharges 3s sooner" },
     { level: 4, name: "Abyss Grace", description: "Bursting drains 20% less stamina" },
+    { level: 5, name: "Deep Charge", description: "Bubble craft effects last 50% longer" },
   ],
 };
 
@@ -71,7 +73,7 @@ export interface Pickup {
   x: number;
   y: number;
   kind: PickupKind;
-  subtype: "plankton" | "shrimp" | "algae" | "glowfruit" | "plastic" | "metal" | "glass";
+  subtype: "plankton" | "shrimp" | "algae" | "glowfruit" | "plastic" | "metal" | "glass" | "bubblepearl";
   size: number;
   value: number;
   collected: boolean;
@@ -118,6 +120,7 @@ export interface Shark {
   stunned: number;
   sleeping: number;
   feared: number;
+  decoySavvy: number;
 }
 
 export interface Chunk {
@@ -234,6 +237,13 @@ export const getDecoyCount = (save: SaveData) => 2 + (save.schools.reef.level >=
 export const getSonarCooldown = (save: SaveData) => (save.schools.deep.level >= 3 ? 5 : 8);
 export const getBurstDrainMultiplier = (save: SaveData) => (save.schools.deep.level >= 4 ? 0.8 : 1);
 export const getRareFoodBonus = (save: SaveData) => (save.schools.deep.level >= 2 ? 1 : 0);
+export const getBubbleRadiusMultiplier = (save: SaveData) => (save.schools.reef.level >= 5 ? 1.4 : 1);
+export const getBubbleDurationMultiplier = (save: SaveData) => (save.schools.deep.level >= 5 ? 1.5 : 1);
+
+/** How many pops a hunter falls for before ignoring decoys; smarter tiers wise up sooner. */
+export const decoySavvyLimit = (tier: EnemyTier) => (tier === "minion" ? 4 : 2);
+/** Effect strength decays as a hunter grows savvy to repeated pops. */
+export const decoySavvyDecay = (savvy: number) => Math.max(0.4, 1 - savvy * 0.25);
 
 export const xpForLevel = (level: number) => 80 + (level - 1) * 55;
 

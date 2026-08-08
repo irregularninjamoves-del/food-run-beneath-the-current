@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   bankRunProgress,
+  decoySavvyDecay,
+  decoySavvyLimit,
   DEEP_SCHOOL,
   getBagCapacity,
+  getBubbleDurationMultiplier,
+  getBubbleRadiusMultiplier,
   getDecoyCount,
   getMaxHealth,
   getMaxStamina,
@@ -182,6 +186,44 @@ test("talents cover stealth, gathering, voyage, and bubble play styles", () => {
   assert.deepEqual([...branches].sort(), ["bubble", "gathering", "stealth", "voyage"]);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 8);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, fishType: "forager" }), 11);
+});
+
+test("level-five schools empower the chosen bubble craft", () => {
+  const base = structuredClone(STARTER_SAVE);
+  assert.equal(getBubbleRadiusMultiplier(base), 1);
+  assert.equal(getBubbleDurationMultiplier(base), 1);
+  const grown = structuredClone(STARTER_SAVE);
+  grown.schools.reef.level = 5;
+  grown.schools.deep.level = 5;
+  assert.equal(getBubbleRadiusMultiplier(grown), 1.4);
+  assert.equal(getBubbleDurationMultiplier(grown), 1.5);
+});
+
+test("hunters wise up to repeated decoys, smarter tiers sooner", () => {
+  assert.equal(decoySavvyLimit("minion"), 4);
+  assert.equal(decoySavvyLimit("lieutenant"), 2);
+  assert.equal(decoySavvyDecay(0), 1, "a fresh hunter falls for the full effect");
+  assert.ok(decoySavvyDecay(1) < 1, "effects weaken after the first pop");
+  assert.equal(decoySavvyDecay(9), 0.4, "effect strength never drops below the floor");
+});
+
+test("bubble pearls appear only in deep water and take no bag space", () => {
+  for (const seed of [21, 4242, 90210]) {
+    for (let index = 1; index <= 5; index += 1) {
+      assert.ok(createChunk(index, seed).pickups.every((pickup) => pickup.kind !== "bubble"), `pearl found before deep water in chunk ${index}`);
+    }
+  }
+  let found = 0;
+  for (const seed of [21, 4242, 90210]) {
+    for (let index = 6; index < 26; index += 1) {
+      for (const pickup of createChunk(index, seed).pickups) {
+        if (pickup.kind !== "bubble") continue;
+        found += 1;
+        assert.equal(pickup.size, 0, "pearls must not consume bag space");
+      }
+    }
+  }
+  assert.ok(found > 0, "deep water must sometimes offer bubble pearls");
 });
 
 test("only one bubble craft can ever be chosen", () => {

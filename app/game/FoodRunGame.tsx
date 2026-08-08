@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   bankRunProgress,
+  decoySavvyDecay,
+  decoySavvyLimit,
   DEEP_SCHOOL,
   FISH_TYPES,
   FishType,
   getBagCapacity,
+  getBubbleDurationMultiplier,
+  getBubbleRadiusMultiplier,
   getBurstDrainMultiplier,
   getDecoyCount,
   getMaxHealth,
@@ -27,7 +31,7 @@ import {
   ZoneId,
   zoneForX,
 } from "./model";
-import { loadSave, persistSave } from "./save";
+import { clearSave, loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
 import { gameAudio } from "./audio";
 import { ENEMY_ARCHETYPES, EnemyKind, TIER_COLORS } from "./enemies";
@@ -73,7 +77,8 @@ interface Runtime {
   scannerCooldown: number;
   scannerPulse: number;
   traps: number;
-  decoy: { x: number; y: number; vx: number; vy: number; life: number; popped: boolean; slept: string[] } | null;
+  decoy: { x: number; y: number; vx: number; vy: number; life: number; popped: boolean; charged: boolean; slept: string[] } | null;
+  chargedPop: boolean;
   shake: number;
   notice: string;
   noticeTime: number;
@@ -162,6 +167,7 @@ function freshRuntime(save: SaveData): Runtime {
     scannerPulse: 0,
     traps: getDecoyCount(save),
     decoy: null,
+    chargedPop: false,
     shake: 0,
     notice: "",
     noticeTime: 0,
@@ -390,7 +396,24 @@ function drawPickup(ctx: CanvasRenderingContext2D, x: number, y: number, kind: s
     ctx.shadowColor = "#8dfff0";
     ctx.shadowBlur = 18;
   }
-  if (kind === "food") {
+  if (kind === "bubble") {
+    const pulse = 1 + Math.sin(time * 3 + x * 0.05) * 0.12;
+    ctx.shadowColor = "#e9a8ff";
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = "rgba(233,168,255,.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 11 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(248,226,255,.92)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 5 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    ctx.beginPath();
+    ctx.arc(-2.5, -3, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (kind === "food") {
     ctx.fillStyle = rare ? "#8dffe6" : subtype === "algae" ? "#8ed85f" : subtype === "shrimp" ? "#ff9e97" : "#ffd75f";
     for (let i = 0; i < 3; i++) {
       ctx.beginPath();
@@ -517,6 +540,7 @@ export default function FoodRunGame() {
   const runtimeRef = useRef<Runtime | null>(null);
   const actionQueue = useRef<string[]>([]);
   const [stickVisual, setStickVisual] = useState({ x: 0, y: 0 });
+  const [resetArmed, setResetArmed] = useState(false);
   const [ui, setUi] = useState<UiSnapshot>(() => {
     const save = STARTER_SAVE;
     return {
@@ -601,6 +625,7 @@ export default function FoodRunGame() {
     g.scannerPulse = 0;
     g.traps = getDecoyCount(g.save);
     g.decoy = null;
+    g.chargedPop = false;
     actionQueue.current = [];
     g.whale = { x: g.save.tutorialComplete ? 1750 : 1180, y: 260, helped: false };
     g.tutorialStep = g.save.tutorialComplete ? TUTORIAL_STEPS.length : 0;
@@ -843,17 +868,27 @@ export default function FoodRunGame() {
             // The pop is loud: minions and lieutenants snap toward it. Bosses ignore toys.
             const stunCraft = hasTalent(g.save.unlockedTalents, "stun-bubble");
             const guardianCraft = hasTalent(g.save.unlockedTalents, "guardian-bubble");
+            const radiusMult = getBubbleRadiusMultiplier(g.save) * (g.decoy.charged ? 1.5 : 1);
+            const durationMult = getBubbleDurationMultiplier(g.save) * (g.decoy.charged ? 1.5 : 1);
             for (const chunk of g.chunks.active()) {
               for (const shark of chunk.sharks) {
                 if (shark.tier === "boss") continue;
                 const popDistance = distance(shark.x, shark.y, g.decoy.x, g.decoy.y);
-                if (stunCraft && popDistance < 190) shark.stunned = Math.max(shark.stunned, shark.tier === "minion" ? 2 : 1);
-                if (guardianCraft && shark.tier === "minion" && popDistance < 450) {
-                  shark.feared = 3.4;
+                if (popDistance >= 520 * radiusMult) continue;
+                if (shark.decoySavvy >= decoySavvyLimit(shark.tier)) {
+                  // This one has seen the trick too often to fall for it again.
+                  g.floaters.push({ x: shark.x, y: shark.y - 44, text: "WISE TO IT", color: "#9fb9c9", life: 1.1 });
+                  continue;
+                }
+                const potency = durationMult * decoySavvyDecay(shark.decoySavvy);
+                shark.decoySavvy += 1;
+                if (stunCraft && popDistance < 190 * radiusMult) shark.stunned = Math.max(shark.stunned, (shark.tier === "minion" ? 2 : 1) * potency);
+                if (guardianCraft && shark.tier === "minion" && popDistance < 450 * radiusMult) {
+                  shark.feared = 3.4 * potency;
                   shark.alert = 0;
                   continue;
                 }
-                if (shark.state !== "CHASE" && popDistance < 520) {
+                if (shark.state !== "CHASE") {
                   shark.lastKnownX = g.decoy.x;
                   shark.lastKnownY = g.decoy.y;
                   shark.state = "INVESTIGATE";
@@ -905,8 +940,9 @@ export default function FoodRunGame() {
           else if (g.decoy && !g.decoy.popped) showNotice(g, "A decoy is already in the water.", 1.1);
           else {
             g.traps -= 1;
-            g.decoy = { x: g.player.x + g.player.facing * 26, y: g.player.y, vx: g.player.facing * 430 + g.player.vx * 0.4, vy: -34, life: 0.85, popped: false, slept: [] };
-            showNotice(g, "Bubble decoy fired — it pops loud where it lands.", 1.6);
+            g.decoy = { x: g.player.x + g.player.facing * 26, y: g.player.y, vx: g.player.facing * 430 + g.player.vx * 0.4, vy: -34, life: 0.85, popped: false, charged: g.chargedPop, slept: [] };
+            showNotice(g, g.chargedPop ? "Supercharged bubble away — brace for a mighty pop." : "Bubble decoy fired — it pops loud where it lands.", 1.6);
+            g.chargedPop = false;
           }
         }
       }
@@ -1028,6 +1064,16 @@ export default function FoodRunGame() {
 
         for (const pickup of chunk.pickups) {
           if (pickup.collected || distance(g.player.x, g.player.y, pickup.x, pickup.y) > FISH_TYPES[g.save.fishType].gatherRadius) continue;
+          if (pickup.kind === "bubble") {
+            pickup.collected = true;
+            g.traps += 1;
+            g.chargedPop = true;
+            g.floaters.push({ x: pickup.x, y: pickup.y - 14, text: "+1 CHARGED DECOY", color: "#e9a8ff", life: 1.3 });
+            showNotice(g, "A bubble pearl hums in your fins — the next pop will be mighty.", 2.2);
+            for (let i = 0; i < 10; i++) g.particles.push({ x: pickup.x, y: pickup.y, vx: (Math.random() - 0.5) * 90, vy: (Math.random() - 0.6) * 80, life: 0.5 + Math.random() * 0.4, size: 2 + Math.random() * 3, kind: "bubble" });
+            audioCue("pickup", g.save.settings.sound);
+            continue;
+          }
           if (g.bagUsed + pickup.size > getBagCapacity(g.save)) {
             if (g.notice !== "Bag full — return home or leave something behind.") showNotice(g, "Bag full — return home or leave something behind.", 1.8);
             continue;
@@ -1063,8 +1109,9 @@ export default function FoodRunGame() {
           shark.feared = Math.max(0, shark.feared - dt);
           if (g.decoy?.popped && shark.tier !== "boss" && shark.sleeping <= 0
             && hasTalent(g.save.unlockedTalents, "dream-bubble") && !g.decoy.slept.includes(shark.id)
-            && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 135) {
-            shark.sleeping = shark.tier === "minion" ? 3.2 : 1.4;
+            && shark.decoySavvy < decoySavvyLimit(shark.tier)
+            && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 135 * getBubbleRadiusMultiplier(g.save) * (g.decoy.charged ? 1.5 : 1)) {
+            shark.sleeping = (shark.tier === "minion" ? 3.2 : 1.4) * getBubbleDurationMultiplier(g.save) * decoySavvyDecay(shark.decoySavvy) * (g.decoy.charged ? 1.5 : 1);
             g.decoy.slept.push(shark.id);
           }
           if (shark.feared > 0) {
@@ -1376,7 +1423,7 @@ export default function FoodRunGame() {
             if (x < -40 || x > width + 40) continue;
             drawPickup(ctx, x, pickup.y, pickup.kind, pickup.subtype, Boolean(pickup.rare), g.elapsed);
             if (g.scannerPulse > 0) {
-              ctx.strokeStyle = pickup.kind === "food" ? `rgba(255,231,122,${g.scannerPulse})` : `rgba(132,241,255,${g.scannerPulse})`;
+              ctx.strokeStyle = pickup.kind === "food" ? `rgba(255,231,122,${g.scannerPulse})` : pickup.kind === "bubble" ? `rgba(233,168,255,${g.scannerPulse})` : `rgba(132,241,255,${g.scannerPulse})`;
               ctx.lineWidth = 2;
               ctx.beginPath();
               ctx.arc(x, pickup.y, 14 + (1 - g.scannerPulse) * 18, 0, Math.PI * 2);
@@ -1562,9 +1609,23 @@ export default function FoodRunGame() {
   const enterFromTitle = () => {
     const g = runtimeRef.current;
     if (!g) return;
+    setResetArmed(false);
     audioCue("pickup", g.save.settings.sound);
     g.phase = "home";
     gameAudio.setMusic("home", g.save.settings.music);
+    syncUi(g);
+  };
+
+  const resetProgress = () => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    if (!resetArmed) {
+      setResetArmed(true);
+      return;
+    }
+    clearSave();
+    g.save = structuredClone(STARTER_SAVE);
+    setResetArmed(false);
     syncUi(g);
   };
 
@@ -1737,6 +1798,9 @@ export default function FoodRunGame() {
           <p>Venture beyond the reef. Read the water. Feed your school.</p>
           <button className="primary-button large" onClick={enterFromTitle}>ENTER THE CURRENT <span>→</span></button>
           <div className="title-foot"><span>STEALTH</span><i /> <span>GATHERING</span><i /> <span>EXTRACTION</span></div>
+          <button className={`text-button reset-progress ${resetArmed ? "armed" : ""}`} onClick={resetProgress}>
+            {resetArmed ? "CLICK AGAIN TO ERASE ALL PROGRESS" : "RESET PROGRESS"}
+          </button>
         </section>
       )}
 

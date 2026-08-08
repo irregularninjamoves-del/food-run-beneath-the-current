@@ -25,3 +25,11 @@ export function persistSave(save: SaveData) {
     // Progress remains valid for the current session when storage is unavailable.
   }
 }
+
+export function clearSave() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch {
+    // Nothing to clear when storage is unavailable.
+  }
+}
