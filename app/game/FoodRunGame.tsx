@@ -31,7 +31,7 @@ import { loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
 import { gameAudio } from "./audio";
 import { ENEMY_ARCHETYPES, EnemyKind, TIER_COLORS } from "./enemies";
-import { hasTalent, TALENTS, TalentId, talentPointsForLevel } from "./talents";
+import { exclusiveGroupTaken, hasTalent, TALENTS, TalentId, talentPointsForLevel } from "./talents";
 
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; size: number; kind: "bubble" | "spark" };
 type Floater = { x: number; y: number; text: string; color: string; life: number };
@@ -73,7 +73,7 @@ interface Runtime {
   scannerCooldown: number;
   scannerPulse: number;
   traps: number;
-  decoy: { x: number; y: number; life: number } | null;
+  decoy: { x: number; y: number; vx: number; vy: number; life: number; popped: boolean; slept: string[] } | null;
   shake: number;
   notice: string;
   noticeTime: number;
@@ -601,6 +601,7 @@ export default function FoodRunGame() {
     g.scannerPulse = 0;
     g.traps = getDecoyCount(g.save);
     g.decoy = null;
+    actionQueue.current = [];
     g.whale = { x: g.save.tutorialComplete ? 1750 : 1180, y: 260, helped: false };
     g.tutorialStep = g.save.tutorialComplete ? TUTORIAL_STEPS.length : 0;
     g.tutorialFlags = { moved: false, burst: false, hid: false, chased: false, escaped: false, whale: false, junk: false };
@@ -646,7 +647,8 @@ export default function FoodRunGame() {
     persistSave(next);
     audioCue("bank", next.settings.sound);
     gameAudio.setMusic("home", next.settings.music);
-    gameAudio.playCreature("dolphin", next.settings.sound);
+    if (banked.schoolLevelGained) gameAudio.playSchoolLevelUp(next.settings.sound);
+    else gameAudio.playCreature("dolphin", next.settings.sound);
     syncUi(g);
   }, [syncUi]);
 
@@ -691,7 +693,10 @@ export default function FoodRunGame() {
     const talent = TALENTS.find((entry) => entry.id === id);
     const points = talentPointsForLevel(g.save.level) - g.save.unlockedTalents.length;
     if (!talent || hasTalent(g.save.unlockedTalents, id)) return;
-    if (points <= 0 || g.save.level < talent.level || (talent.prerequisite && !hasTalent(g.save.unlockedTalents, talent.prerequisite))) {
+    const takenAlternative = exclusiveGroupTaken(g.save.unlockedTalents, talent);
+    if (takenAlternative) {
+      showNotice(g, `Your bubbles already carry ${takenAlternative.name} — one bubble craft only.`, 2.4);
+    } else if (points <= 0 || g.save.level < talent.level || (talent.prerequisite && !hasTalent(g.save.unlockedTalents, talent.prerequisite))) {
       showNotice(g, talent?.prerequisite ? "Unlock the previous talent in this current first." : "Reach a higher level to earn another talent point.");
     } else {
       g.save = { ...g.save, unlockedTalents: [...g.save.unlockedTalents, id] };
@@ -823,7 +828,43 @@ export default function FoodRunGame() {
       if (g.noticeTime === 0) g.notice = "";
       if (g.decoy) {
         g.decoy.life -= dt;
-        if (g.decoy.life <= 0) g.decoy = null;
+        if (!g.decoy.popped) {
+          // The decoy flies as a projectile, then pops into a noisy bubble column.
+          g.decoy.x += g.decoy.vx * dt;
+          g.decoy.y += g.decoy.vy * dt;
+          if (Math.random() < dt * 30) g.particles.push({ x: g.decoy.x, y: g.decoy.y, vx: (Math.random() - 0.5) * 30, vy: -20 - Math.random() * 25, life: 0.6, size: 1.5 + Math.random() * 2.5, kind: "bubble" });
+          const hitBounds = g.decoy.y < WORLD.surfaceY + 30 || g.decoy.y > WORLD.floorY - 18 || g.decoy.x < 110;
+          if (g.decoy.life <= 0 || hitBounds) {
+            g.decoy.popped = true;
+            g.decoy.life = 5.5;
+            g.decoy.y = clamp(g.decoy.y, WORLD.surfaceY + 40, WORLD.floorY - 25);
+            for (let i = 0; i < 14; i++) g.particles.push({ x: g.decoy.x, y: g.decoy.y, vx: (Math.random() - 0.5) * 130, vy: (Math.random() - 0.8) * 110, life: 0.6 + Math.random() * 0.5, size: 2 + Math.random() * 4, kind: "bubble" });
+            audioCue("sonar", g.save.settings.sound);
+            // The pop is loud: minions and lieutenants snap toward it. Bosses ignore toys.
+            const stunCraft = hasTalent(g.save.unlockedTalents, "stun-bubble");
+            const guardianCraft = hasTalent(g.save.unlockedTalents, "guardian-bubble");
+            for (const chunk of g.chunks.active()) {
+              for (const shark of chunk.sharks) {
+                if (shark.tier === "boss") continue;
+                const popDistance = distance(shark.x, shark.y, g.decoy.x, g.decoy.y);
+                if (stunCraft && popDistance < 190) shark.stunned = Math.max(shark.stunned, shark.tier === "minion" ? 2 : 1);
+                if (guardianCraft && shark.tier === "minion" && popDistance < 450) {
+                  shark.feared = 3.4;
+                  shark.alert = 0;
+                  continue;
+                }
+                if (shark.state !== "CHASE" && popDistance < 520) {
+                  shark.lastKnownX = g.decoy.x;
+                  shark.lastKnownY = g.decoy.y;
+                  shark.state = "INVESTIGATE";
+                  shark.stateTime = 0;
+                  shark.alert = Math.max(shark.alert, 0.4);
+                }
+              }
+            }
+          }
+        }
+        if (g.decoy && g.decoy.life <= 0) g.decoy = null;
       }
       for (const floater of g.floaters) {
         floater.y -= 30 * dt;
@@ -861,10 +902,11 @@ export default function FoodRunGame() {
         }
         if (action === "q") {
           if (g.traps <= 0) showNotice(g, "No bubble decoys left.", 1.2);
+          else if (g.decoy && !g.decoy.popped) showNotice(g, "A decoy is already in the water.", 1.1);
           else {
             g.traps -= 1;
-            g.decoy = { x: g.player.x - g.player.facing * 70, y: g.player.y, life: 5 };
-            showNotice(g, "Bubble decoy deployed.", 1.4);
+            g.decoy = { x: g.player.x + g.player.facing * 26, y: g.player.y, vx: g.player.facing * 430 + g.player.vx * 0.4, vy: -34, life: 0.85, popped: false, slept: [] };
+            showNotice(g, "Bubble decoy fired — it pops loud where it lands.", 1.6);
           }
         }
       }
@@ -1016,6 +1058,32 @@ export default function FoodRunGame() {
           const enemy = ENEMY_ARCHETYPES[shark.kind];
           shark.stateTime += dt;
           shark.attackCooldown = Math.max(0, shark.attackCooldown - dt);
+          shark.stunned = Math.max(0, shark.stunned - dt);
+          shark.sleeping = Math.max(0, shark.sleeping - dt);
+          shark.feared = Math.max(0, shark.feared - dt);
+          if (g.decoy?.popped && shark.tier !== "boss" && shark.sleeping <= 0
+            && hasTalent(g.save.unlockedTalents, "dream-bubble") && !g.decoy.slept.includes(shark.id)
+            && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 135) {
+            shark.sleeping = shark.tier === "minion" ? 3.2 : 1.4;
+            g.decoy.slept.push(shark.id);
+          }
+          if (shark.feared > 0) {
+            // The phantom guardian sends minions fleeing; they forget the player entirely.
+            const fleeFrom = g.decoy ? g.decoy.x : g.player.x;
+            shark.facing = shark.x >= fleeFrom ? 1 : -1;
+            shark.vx += (shark.facing * enemy.chaseSpeed * 0.9 - shark.vx) * Math.min(1, dt * 2.4);
+            shark.alert = 0;
+            shark.x += shark.vx * dt;
+            shark.y = clamp(shark.y, WORLD.surfaceY + 55, WORLD.floorY - 55);
+            continue;
+          }
+          if (shark.stunned > 0 || shark.sleeping > 0) {
+            shark.vx *= Math.pow(0.8, dt * 60);
+            shark.alert = Math.max(0, shark.alert - dt * 0.6);
+            shark.x += shark.vx * dt;
+            shark.y = clamp(shark.y, WORLD.surfaceY + 55, WORLD.floorY - 55);
+            continue;
+          }
           const dx = g.player.x - shark.x;
           const dy = g.player.y - shark.y;
           const dist = Math.hypot(dx, dy);
@@ -1033,7 +1101,11 @@ export default function FoodRunGame() {
             showNotice(g, "COLOSSAL SHADOW — its awareness reaches far. Sonar reveals the radii.", 4.2);
             g.shake = g.save.settings.reducedMotion ? 2 : 7;
           }
-          if (g.decoy && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 460 && shark.state !== "CHASE") {
+          // Popped decoys hold attention by tier: minions the full bubble, smarter
+          // lieutenants only briefly, bosses never.
+          const decoyHoldsAttention = g.decoy?.popped && shark.tier !== "boss"
+            && (shark.tier === "minion" ? g.decoy.life > 0 : g.decoy.life > 2.75);
+          if (g.decoy && decoyHoldsAttention && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 460 && shark.state !== "CHASE") {
             shark.lastKnownX = g.decoy.x;
             shark.lastKnownY = g.decoy.y;
             shark.state = "INVESTIGATE";
@@ -1353,6 +1425,22 @@ export default function FoodRunGame() {
               ctx.restore();
             }
             drawPredator(ctx, x, shark.y, shark.facing, shark.state, shark.alert, shark.kind);
+            if (shark.sleeping > 0) {
+              ctx.font = "800 13px var(--font-mono), monospace";
+              ctx.textAlign = "center";
+              ctx.fillStyle = "rgba(190,229,255,.92)";
+              ctx.fillText("z", x + 14 + Math.sin(g.elapsed * 3) * 2, shark.y - 34 - enemy.scale * 12);
+              ctx.font = "800 17px var(--font-mono), monospace";
+              ctx.fillText("Z", x + 26 + Math.sin(g.elapsed * 3 + 1) * 3, shark.y - 46 - enemy.scale * 12);
+            } else if (shark.stunned > 0) {
+              ctx.font = "900 15px var(--font-mono), monospace";
+              ctx.textAlign = "center";
+              ctx.fillStyle = "#ffe27a";
+              for (let star = 0; star < 3; star++) {
+                const angle = g.elapsed * 5 + star * (Math.PI * 2 / 3);
+                ctx.fillText("✦", x + Math.cos(angle) * 22, shark.y - 34 - enemy.scale * 12 + Math.sin(angle) * 7);
+              }
+            }
           }
         }
 
@@ -1362,13 +1450,33 @@ export default function FoodRunGame() {
           const dx = g.decoy.x - g.cameraX;
           ctx.strokeStyle = "rgba(131,241,255,.85)";
           ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.arc(dx, g.decoy.y, 18 + Math.sin(g.elapsed * 8) * 5, 0, Math.PI * 2);
-          ctx.stroke();
-          for (let i = 0; i < 6; i++) {
+          if (!g.decoy.popped) {
+            ctx.fillStyle = "rgba(160,245,255,.9)";
             ctx.beginPath();
-            ctx.arc(dx + Math.sin(i) * 10, g.decoy.y - ((g.elapsed * 30 + i * 10) % 45), 3, 0, Math.PI * 2);
+            ctx.arc(dx, g.decoy.y, 7, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(dx, g.decoy.y, 11 + Math.sin(g.elapsed * 14) * 2, 0, Math.PI * 2);
             ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.arc(dx, g.decoy.y, 18 + Math.sin(g.elapsed * 8) * 5, 0, Math.PI * 2);
+            ctx.stroke();
+            for (let i = 0; i < 6; i++) {
+              ctx.beginPath();
+              ctx.arc(dx + Math.sin(i) * 10, g.decoy.y - ((g.elapsed * 30 + i * 10) % 45), 3, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            if (hasTalent(g.save.unlockedTalents, "guardian-bubble") && g.decoy.life > 2) {
+              // The Guardian Illusion: a looming phantom fish shimmers out of the pop.
+              ctx.save();
+              ctx.globalAlpha = 0.3 + Math.sin(g.elapsed * 6) * 0.08;
+              ctx.translate(dx, g.decoy.y);
+              const loom = 3 + Math.sin(g.elapsed * 2.4) * 0.25;
+              ctx.scale(loom, loom);
+              drawFish(ctx, 0, 0, g.decoy.vx >= 0 ? 1 : -1, 0, false, false);
+              ctx.restore();
+            }
           }
         }
         if (g.scannerPulse > 0) {
@@ -1612,8 +1720,12 @@ export default function FoodRunGame() {
                 style={{ left: `calc(50% + ${stickVisual.x}px)`, top: `calc(50% + ${stickVisual.y}px)` }}
               />
             </div>
-            <button className="touch-burst" onPointerDown={() => pressControl("shift", true)} onPointerUp={() => pressControl("shift", false)} onPointerLeave={() => pressControl("shift", false)}>BURST</button>
-            <button className="touch-action" onClick={() => actionQueue.current.push("e")}>E</button>
+            <div className="touch-cluster">
+              <button className="touch-small" onClick={() => actionQueue.current.push("f")}>SONAR</button>
+              <button className="touch-small" onClick={() => actionQueue.current.push("q")}>DECOY {ui.traps}</button>
+              <button className="touch-burst" onPointerDown={() => pressControl("shift", true)} onPointerUp={() => pressControl("shift", false)} onPointerLeave={() => pressControl("shift", false)}>BURST</button>
+              <button className="touch-action" onClick={() => actionQueue.current.push("e")}>E</button>
+            </div>
           </div>
         </>
       )}
@@ -1668,23 +1780,24 @@ export default function FoodRunGame() {
             </article>
             <article className="reef-card talent-card">
               <div className="talent-heading"><span className="eyebrow">TALENT CURRENTS</span><strong>{availableTalentPoints} POINT{availableTalentPoints === 1 ? "" : "S"}</strong></div>
-              <p className="talent-intro">Earn one point at levels 3, 5, 7, and every second level after. Choose survival strategies, never firepower.</p>
+              <p className="talent-intro">Earn one point at levels 3, 5, 7, and every second level after. Choose survival strategies, never firepower. Bubble crafts are a school of thought — your bubbles can only ever learn one.</p>
               <div className="talent-grid">
                 {TALENTS.map((talent) => {
                   const unlocked = hasTalent(ui.save.unlockedTalents, talent.id);
                   const prerequisiteMet = !talent.prerequisite || hasTalent(ui.save.unlockedTalents, talent.prerequisite);
-                  const available = !unlocked && availableTalentPoints > 0 && ui.save.level >= talent.level && prerequisiteMet;
+                  const groupTaken = !unlocked && exclusiveGroupTaken(ui.save.unlockedTalents, talent);
+                  const available = !unlocked && !groupTaken && availableTalentPoints > 0 && ui.save.level >= talent.level && prerequisiteMet;
                   return (
                     <button
                       key={talent.id}
                       className={`talent-choice ${talent.branch} ${unlocked ? "unlocked" : ""}`}
                       onClick={() => unlockTalent(talent.id)}
                       disabled={!available}
-                      aria-label={`${talent.name}: ${unlocked ? "unlocked" : available ? "unlock" : `locked until level ${talent.level}`}`}
+                      aria-label={`${talent.name}: ${unlocked ? "unlocked" : groupTaken ? "another bubble craft was chosen" : available ? "unlock" : `locked until level ${talent.level}`}`}
                     >
-                      <span className="talent-symbol">{talent.branch === "stealth" ? "◌" : talent.branch === "voyage" ? "≈" : "◇"}</span>
+                      <span className="talent-symbol">{talent.branch === "stealth" ? "◌" : talent.branch === "voyage" ? "≈" : talent.branch === "bubble" ? "○" : "◇"}</span>
                       <span><b>{talent.name}</b><small>{talent.description} · LV {talent.level}</small></span>
-                      <em>{unlocked ? "✓" : available ? "+" : prerequisiteMet ? `LV${talent.level}` : "CHAIN"}</em>
+                      <em>{unlocked ? "✓" : groupTaken ? "1 ONLY" : available ? "+" : prerequisiteMet ? `LV${talent.level}` : "CHAIN"}</em>
                     </button>
                   );
                 })}
@@ -1735,7 +1848,13 @@ export default function FoodRunGame() {
           <div className="result-grid">
             <div><span>FOOD DELIVERED</span><b>{ui.lastDelivery ? ui.lastDelivery.foodDelivered : ui.run.food}</b></div><div><span>SALVAGE</span><b>{ui.run.salvage}</b></div><div><span>FARTHEST DISTANCE</span><b>{Math.round(ui.run.distance / 10)}m</b></div><div><span>XP EARNED</span><b>+{ui.resultXp}</b></div>
           </div>
-          {ui.lastDelivery?.schoolLevelGained && <div className="level-up">THE SCHOOL GREW · NEW FISH ARRIVE · CHECK ITS PERKS</div>}
+          {ui.lastDelivery?.schoolLevelGained && (
+            <div className="school-levelup" role="status">
+              <span className="school-levelup-bubbles" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</span>
+              <strong>SCHOOL LEVEL UP!</strong>
+              <span className="school-levelup-sub">{SCHOOLS[ui.lastDelivery.schoolId].name} grew to LV {ui.lastDelivery.schoolLevel} — new fish arrive</span>
+            </div>
+          )}
           {ui.levelGained && <div className="level-up">LEVEL UP · NEW CURRENTS AWAIT</div>}
           {!ui.save.tutorialComplete && <div className="level-up">TRAINING COMPLETE · CRAFT YOUR FIRST BAG UPGRADE</div>}
           <div className="result-actions">

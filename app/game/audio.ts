@@ -13,6 +13,7 @@ const SFX = {
   whale: "/audio/whale-call.mp3",
   dolphinA: "/audio/dolphins-a.mp3",
   dolphinB: "/audio/dolphins-b.mp3",
+  schoolLevelUp: "/audio/school-level-up.mp3",
 } as const;
 
 class GameAudioManager {
@@ -68,6 +69,13 @@ class GameAudioManager {
     this.dolphinFlip = !this.dolphinFlip;
     const sound = new Audio(source);
     sound.volume = kind === "whale" ? 0.46 : 0.34;
+    void sound.play().catch(() => undefined);
+  }
+
+  playSchoolLevelUp(enabled: boolean) {
+    if (!enabled) return;
+    const sound = new Audio(SFX.schoolLevelUp);
+    sound.volume = 0.5;
     void sound.play().catch(() => undefined);
   }
 }

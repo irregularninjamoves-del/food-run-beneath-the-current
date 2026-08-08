@@ -17,7 +17,7 @@ import {
 } from "../app/game/model";
 import { ChunkManager, createChunk } from "../app/game/world";
 import { ENEMY_ARCHETYPES } from "../app/game/enemies";
-import { TALENTS, talentPointsForLevel } from "../app/game/talents";
+import { exclusiveGroupTaken, TALENTS, talentPointsForLevel } from "../app/game/talents";
 
 test("procedural chunks are deterministic for a run seed", () => {
   assert.deepEqual(createChunk(5, 424242), createChunk(5, 424242));
@@ -172,14 +172,25 @@ test("obstacle chunks stay varied and always leave a passable route", () => {
   assert.deepEqual([...kinds].sort(), ["jellyfish", "net", "vent"]);
 });
 
-test("talents cover stealth, gathering, and voyage play styles", () => {
+test("talents cover stealth, gathering, voyage, and bubble play styles", () => {
   assert.equal(talentPointsForLevel(1), 0);
   assert.equal(talentPointsForLevel(3), 1);
   assert.equal(talentPointsForLevel(5), 2);
   assert.equal(talentPointsForLevel(7), 3);
   assert.ok(TALENTS.every((talent) => !talent.name.toLowerCase().includes("weapon")));
   const branches = new Set(TALENTS.map((talent) => talent.branch));
-  assert.deepEqual([...branches].sort(), ["gathering", "stealth", "voyage"]);
+  assert.deepEqual([...branches].sort(), ["bubble", "gathering", "stealth", "voyage"]);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, unlockedTalents: ["deep-pockets"] }), 8);
   assert.equal(getBagCapacity({ ...STARTER_SAVE, fishType: "forager" }), 11);
+});
+
+test("only one bubble craft can ever be chosen", () => {
+  const bubbleCrafts = TALENTS.filter((talent) => talent.exclusiveGroup === "bubble-craft");
+  assert.equal(bubbleCrafts.length, 3, "stun, slumber, and guardian crafts are alternatives");
+  const stun = bubbleCrafts.find((talent) => talent.id === "stun-bubble")!;
+  const guardian = bubbleCrafts.find((talent) => talent.id === "guardian-bubble")!;
+  assert.equal(exclusiveGroupTaken([], stun), null, "no craft chosen yet");
+  assert.equal(exclusiveGroupTaken(["stun-bubble"], guardian)?.id, "stun-bubble", "choosing stun locks the guardian");
+  assert.equal(exclusiveGroupTaken(["stun-bubble"], stun), null, "a chosen craft is not blocked by itself");
+  assert.equal(exclusiveGroupTaken(["quiet-wake"], guardian), null, "other branches never lock bubble crafts");
 });

@@ -13,7 +13,10 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Two schools to feed: Sunbeam Shoal at the home reef and Midnight Shoal far out in deep water — deliver your haul to whichever you reach
 - School levels grow the population on screen and unlock real perks (extra decoys, stamina, hearts, richer rare food, faster sonar, cheaper bursts)
 - Common, uncommon, and rare food tiers; rare glowfruit clusters near predator territory
-- Spendable noncombat talents across stealth, gathering, and voyage currents
+- Spendable noncombat talents across stealth, gathering, voyage, and bubble-craft currents
+- Bubble decoys fire as projectiles that pop loudly where they land, luring minions and (briefly) lieutenants — never bosses
+- Choose exactly one bubble craft: Stun Pop, Slumber Mist, or a Guardian Illusion that scares minions
+- Touch controls include sonar and decoy buttons alongside the thumbstick, burst, and interact
 - Minion, lieutenant, and boss awareness radii with readable alert warnings
 - Seaweed stealth, sonar, decoys, and whale assistance
 - Jellyfish, partial fishing nets, vents, currents, and day/night changes

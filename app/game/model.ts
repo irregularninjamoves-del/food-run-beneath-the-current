@@ -115,6 +115,9 @@ export interface Shark {
   kind: EnemyKind;
   tier: EnemyTier;
   warned: boolean;
+  stunned: number;
+  sleeping: number;
+  feared: number;
 }
 
 export interface Chunk {

@@ -81,6 +81,9 @@ export function createChunk(index: number, runSeed: number): Chunk {
       kind,
       tier: archetype.tier,
       warned: false,
+      stunned: 0,
+      sleeping: 0,
+      feared: 0,
     });
   }
 
