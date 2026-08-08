@@ -1,10 +1,13 @@
-export type MusicMode = "home" | "explore" | "danger";
+export type MusicMode = "home" | "explore" | "danger" | "boss";
 
 const MUSIC: Record<MusicMode, string> = {
-  home: "/audio/home-reef.mp3",
-  explore: "/audio/open-water.mp3",
-  danger: "/audio/danger.mp3",
+  home: "/audio/flanged-abyss.mp3",
+  explore: "/audio/panoramic-drift.mp3",
+  danger: "/audio/subterranean-swell.mp3",
+  boss: "/audio/final-ignition.mp3",
 };
+
+const AMBIENCE = "/audio/underwater-ambience.mp3";
 
 const SFX = {
   whale: "/audio/whale-call.mp3",
@@ -14,6 +17,7 @@ const SFX = {
 
 class GameAudioManager {
   private tracks = new Map<MusicMode, HTMLAudioElement>();
+  private ambience: HTMLAudioElement | null = null;
   private current: MusicMode | null = null;
   private dolphinFlip = false;
 
@@ -23,10 +27,21 @@ class GameAudioManager {
       track = new Audio(MUSIC[mode]);
       track.loop = true;
       track.preload = "auto";
-      track.volume = mode === "danger" ? 0.22 : 0.18;
+      track.volume = mode === "boss" ? 0.26 : mode === "danger" ? 0.22 : 0.18;
       this.tracks.set(mode, track);
     }
     return track;
+  }
+
+  // The aquarium ambience sits under every music mode as a constant bed.
+  private startAmbience() {
+    if (!this.ambience) {
+      this.ambience = new Audio(AMBIENCE);
+      this.ambience.loop = true;
+      this.ambience.preload = "auto";
+      this.ambience.volume = 0.12;
+    }
+    if (this.ambience.paused) void this.ambience.play().catch(() => undefined);
   }
 
   setMusic(mode: MusicMode, enabled: boolean) {
@@ -34,6 +49,7 @@ class GameAudioManager {
       this.stopMusic();
       return;
     }
+    this.startAmbience();
     if (this.current === mode && !this.getTrack(mode).paused) return;
     for (const [name, track] of this.tracks) if (name !== mode) track.pause();
     this.current = mode;
@@ -42,6 +58,7 @@ class GameAudioManager {
 
   stopMusic() {
     for (const track of this.tracks.values()) track.pause();
+    this.ambience?.pause();
     this.current = null;
   }
 

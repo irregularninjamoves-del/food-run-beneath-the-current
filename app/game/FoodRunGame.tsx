@@ -5,6 +5,7 @@ import {
   bankRunProgress,
   DEEP_SCHOOL,
   FISH_TYPES,
+  FishType,
   getBagCapacity,
   getBurstDrainMultiplier,
   getDecoyCount,
@@ -178,7 +179,7 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.roundRect(x, y, w, h, r);
 }
 
-function drawFish(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, tilt: number, hidden: boolean, shield: boolean) {
+function drawFish(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, tilt: number, hidden: boolean, shield: boolean, variant: FishType = "swift") {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(tilt);
@@ -191,33 +192,69 @@ function drawFish(ctx: CanvasRenderingContext2D, x: number, y: number, facing: n
     ctx.stroke();
   }
   ctx.globalAlpha = hidden ? 0.48 : 1;
-  const body = ctx.createLinearGradient(-22, -15, 20, 18);
-  body.addColorStop(0, "#ffbf4d");
-  body.addColorStop(0.58, "#ff756b");
-  body.addColorStop(1, "#ec3f73");
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 24, 15, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#f05d72";
-  ctx.beginPath();
-  ctx.moveTo(-18, 0);
-  ctx.lineTo(-37, -14);
-  ctx.lineTo(-33, 12);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#fff7d9";
-  ctx.beginPath();
-  ctx.arc(11, -4, 4.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#122b4d";
-  ctx.beginPath();
-  ctx.arc(12.5, -4, 2.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,.45)";
-  ctx.beginPath();
-  ctx.ellipse(2, -7, 10, 3, -0.2, 0, Math.PI * 2);
-  ctx.fill();
+  if (variant === "forager") {
+    // The forager reads as a plump teal grazer: round body, fan tail, tall dorsal fin.
+    const body = ctx.createLinearGradient(-18, -18, 18, 20);
+    body.addColorStop(0, "#8be8c5");
+    body.addColorStop(0.55, "#37b39b");
+    body.addColorStop(1, "#1f7f8f");
+    ctx.fillStyle = "#2b9b8a";
+    ctx.beginPath();
+    ctx.moveTo(-14, 0);
+    ctx.quadraticCurveTo(-32, -19, -37, -10);
+    ctx.quadraticCurveTo(-40, 0, -37, 10);
+    ctx.quadraticCurveTo(-32, 19, -14, 0);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-9, -15);
+    ctx.quadraticCurveTo(-1, -28, 9, -14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 20, 17, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d8f7e8";
+    ctx.beginPath();
+    ctx.ellipse(3, 8, 13, 6, 0, 0, Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#fff7d9";
+    ctx.beginPath();
+    ctx.arc(9, -5, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#122b4d";
+    ctx.beginPath();
+    ctx.arc(10.5, -5, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const body = ctx.createLinearGradient(-22, -15, 20, 18);
+    body.addColorStop(0, "#ffbf4d");
+    body.addColorStop(0.58, "#ff756b");
+    body.addColorStop(1, "#ec3f73");
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 24, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f05d72";
+    ctx.beginPath();
+    ctx.moveTo(-18, 0);
+    ctx.lineTo(-37, -14);
+    ctx.lineTo(-33, 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#fff7d9";
+    ctx.beginPath();
+    ctx.arc(11, -4, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#122b4d";
+    ctx.beginPath();
+    ctx.arc(12.5, -4, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.45)";
+    ctx.beginPath();
+    ctx.ellipse(2, -7, 10, 3, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -995,7 +1032,6 @@ export default function FoodRunGame() {
             shark.warned = true;
             showNotice(g, "COLOSSAL SHADOW — its awareness reaches far. Sonar reveals the radii.", 4.2);
             g.shake = g.save.settings.reducedMotion ? 2 : 7;
-            gameAudio.setMusic("danger", g.save.settings.music);
           }
           if (g.decoy && distance(shark.x, shark.y, g.decoy.x, g.decoy.y) < 460 && shark.state !== "CHASE") {
             shark.lastKnownX = g.decoy.x;
@@ -1032,7 +1068,7 @@ export default function FoodRunGame() {
               shark.state = "CHASE";
               shark.stateTime = 0;
               g.tutorialFlags.chased = true;
-              gameAudio.setMusic("danger", g.save.settings.music);
+              gameAudio.setMusic(enemy.tier === "boss" ? "boss" : "danger", g.save.settings.music);
             } else if (shark.stateTime > 1.0) {
               shark.state = "INVESTIGATE";
               shark.stateTime = 0;
@@ -1043,7 +1079,7 @@ export default function FoodRunGame() {
               shark.state = "CHASE";
               shark.stateTime = 0;
               g.tutorialFlags.chased = true;
-              gameAudio.setMusic("danger", g.save.settings.music);
+              gameAudio.setMusic(enemy.tier === "boss" ? "boss" : "danger", g.save.settings.music);
             } else if (distance(shark.x, shark.y, shark.lastKnownX, shark.lastKnownY) < 35 || shark.stateTime > 4) {
               shark.state = "SEARCH";
               shark.stateTime = 0;
@@ -1056,7 +1092,7 @@ export default function FoodRunGame() {
               shark.state = "CHASE";
               shark.stateTime = 0;
               g.tutorialFlags.chased = true;
-              gameAudio.setMusic("danger", g.save.settings.music);
+              gameAudio.setMusic(enemy.tier === "boss" ? "boss" : "danger", g.save.settings.music);
             } else if (shark.stateTime > 5) {
               shark.state = "LOST TARGET";
               shark.stateTime = 0;
@@ -1368,7 +1404,7 @@ export default function FoodRunGame() {
             ctx.stroke();
           }
         }
-        drawFish(ctx, g.player.x - g.cameraX, g.player.y, g.player.facing, clamp(g.player.vy / 450, -0.28, 0.28), g.player.hidden, g.player.whaleShield > 0);
+        drawFish(ctx, g.player.x - g.cameraX, g.player.y, g.player.facing, clamp(g.player.vy / 450, -0.28, 0.28), g.player.hidden, g.player.whaleShield > 0, g.save.fishType);
       }
 
       // Night grading keeps silhouettes readable while changing the mood.

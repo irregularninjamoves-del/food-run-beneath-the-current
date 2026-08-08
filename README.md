@@ -20,7 +20,8 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Floating reward numbers and delivery celebrations
 - Deterministic procedural chunks with bounded recycling
 - Local saved progression
-- Looping reef, exploration, and danger music with one-shot creature effects
+- Distinct looks for each playable fish: the slim coral Swift Fish and the plump teal Forager Fish
+- Looping reef, exploration, chase, and boss-battle music over a constant underwater-ambience bed, with one-shot creature effects
 
 ## Run locally
 
