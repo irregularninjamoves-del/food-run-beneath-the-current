@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  accrueReefTokens,
   applyRunOutcome,
   AWAY_SCHOOLS,
   bankRunProgress,
+  BOOST_PERCENT,
+  dailyCheckIn,
+  earnPlaytimeTokens,
   decoySavvyDecay,
   decoySavvyLimit,
   FISH_TYPES,
@@ -27,7 +29,10 @@ import {
   getSchoolSpeedMultiplier,
   getSonarCooldown,
   getStaminaRegenMultiplier,
+  hasCheckedInToday,
+  nextCheckInReward,
   Phase,
+  PLAYTIME_TOKENS_PER_HOUR,
   REEF_BOOSTS,
   RunStats,
   SaveData,
@@ -36,7 +41,6 @@ import {
   SCHOOLS,
   SchoolId,
   STARTER_SAVE,
-  tokenRatePerHour,
   TUTORIAL_STEPS,
   WORLD,
   xpForLevel,
@@ -89,6 +93,7 @@ interface Runtime {
   zoneId: ZoneId;
   lastDelivery: DeliveryReport | null;
   recordAnnounced: boolean;
+  playSecondsPending: number;
   scannerCooldown: number;
   scannerPulse: number;
   traps: number;
@@ -130,7 +135,9 @@ interface UiSnapshot {
   levelGained: boolean;
   lastDelivery: DeliveryReport | null;
   boostActive: boolean;
-  boostHoursLeft: number;
+  boostMinutesLeft: number;
+  checkedInToday: boolean;
+  nextCheckIn: number;
 }
 
 const emptyRun = (): RunStats => ({
@@ -181,6 +188,7 @@ function freshRuntime(save: SaveData): Runtime {
     zoneId: "reef",
     lastDelivery: null,
     recordAnnounced: false,
+    playSecondsPending: 0,
     scannerCooldown: 0,
     scannerPulse: 0,
     traps: getDecoyCount(save),
@@ -566,7 +574,7 @@ export default function FoodRunGame() {
       stealth: "CLEAR", threat: "NO CONTACT", bagUsed: 0, bagCapacity: getBagCapacity(save), run: emptyRun(), save,
       tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", zoneName: "Shallow Reef", nearHome: true,
       nearCover: false, nearWhale: false, nearSchool: null, resultXp: 0, levelGained: false, lastDelivery: null,
-      boostActive: false, boostHoursLeft: 0,
+      boostActive: false, boostMinutesLeft: 0, checkedInToday: false, nextCheckIn: 1,
     };
   });
 
@@ -618,7 +626,9 @@ export default function FoodRunGame() {
       levelGained: g.levelGained,
       lastDelivery: g.lastDelivery,
       boostActive: Date.now() < g.save.boostExpiresAt,
-      boostHoursLeft: Math.max(0, Math.ceil((g.save.boostExpiresAt - Date.now()) / 3_600_000)),
+      boostMinutesLeft: Math.max(0, Math.ceil((g.save.boostExpiresAt - Date.now()) / 60_000)),
+      checkedInToday: hasCheckedInToday(g.save, Date.now()),
+      nextCheckIn: nextCheckInReward(g.save, Date.now()),
     });
   }, []);
 
@@ -695,21 +705,29 @@ export default function FoodRunGame() {
     const boost = REEF_BOOSTS.find((entry) => entry.id === boostId);
     if (!boost) return;
     const now = Date.now();
-    // Settle generation up to this moment so the boost only affects time ahead.
-    g.save = accrueReefTokens(g.save, now).save;
-    if (now < g.save.boostExpiresAt && g.save.boostPercent >= boost.percent) {
-      showNotice(g, "An equal or stronger Reef Boost is already flowing.", 2.2);
-      syncUi(g);
-      return;
-    }
     if (g.save.reefTokens < boost.cost) {
       showNotice(g, `Need ${boost.cost - g.save.reefTokens} more Reef Tokens for that boost.`, 2.2);
       syncUi(g);
       return;
     }
-    g.save = { ...g.save, reefTokens: g.save.reefTokens - boost.cost, boostPercent: boost.percent, boostExpiresAt: now + boost.hours * 3_600_000 };
+    // Buying extends whatever boost time remains rather than replacing it.
+    const expiresAt = Math.max(now, g.save.boostExpiresAt) + boost.minutes * 60_000;
+    g.save = { ...g.save, reefTokens: g.save.reefTokens - boost.cost, boostPercent: BOOST_PERCENT, boostExpiresAt: expiresAt };
     persistSave(g.save);
-    showNotice(g, `${boost.name} flowing for ${boost.hours}h — schools grow and tokens flow faster.`, 3);
+    const totalMinutes = Math.round((expiresAt - now) / 60_000);
+    showNotice(g, `Reef Boost +${BOOST_PERCENT}% flowing — ${totalMinutes >= 90 ? `${Math.round(totalMinutes / 60)}h` : `${totalMinutes}m`} remaining.`, 3);
+    audioCue("bank", g.save.settings.sound);
+    syncUi(g);
+  }, [syncUi]);
+
+  const checkIn = useCallback(() => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    const result = dailyCheckIn(g.save, Date.now());
+    if (result.granted <= 0) return;
+    g.save = result.save;
+    persistSave(g.save);
+    showNotice(g, `DAY ${result.streakDay} CHECK-IN — +${result.granted} Reef Token${result.granted === 1 ? "" : "s"}! Playtime earning is on for today.`, 4);
     audioCue("bank", g.save.settings.sound);
     syncUi(g);
   }, [syncUi]);
@@ -717,7 +735,7 @@ export default function FoodRunGame() {
   const goHome = useCallback(() => {
     const g = runtimeRef.current;
     if (!g) return;
-    g.save = accrueReefTokens(g.save, Date.now()).save;
+    g.save = { ...g.save, lastSeenAt: Date.now() };
     persistSave(g.save);
     g.phase = "home";
     g.paused = false;
@@ -732,7 +750,7 @@ export default function FoodRunGame() {
   const bankRun = useCallback((g: Runtime, schoolId: SchoolId) => {
     const banked = bankRunProgress(g.save, g.run, schoolId, getBoostMultiplier(g.save, Date.now()));
     const outcome = applyRunOutcome(banked.save, g.run, true);
-    const next = accrueReefTokens(outcome.save, Date.now()).save;
+    const next = { ...outcome.save, lastSeenAt: Date.now() };
     g.levelGained = banked.levelGained;
     if (!next.tutorialComplete && g.tutorialStep >= TUTORIAL_STEPS.length - 1) next.tutorialComplete = true;
     g.save = next;
@@ -818,10 +836,15 @@ export default function FoodRunGame() {
 
   useEffect(() => {
     const g = freshRuntime(loadSave());
-    const arrival = accrueReefTokens(g.save, Date.now());
-    g.save = arrival.save;
+    const now = Date.now();
+    const awayHours = g.save.lastSeenAt > 0 ? (now - g.save.lastSeenAt) / 3_600_000 : 0;
+    if (awayHours >= 1) {
+      showNotice(g, hasCheckedInToday(g.save, now)
+        ? `WELCOME BACK — your reef kept 🪸 ${g.save.reefTokens} safe. Dive on to keep earning.`
+        : `WELCOME BACK — your reef kept 🪸 ${g.save.reefTokens} safe. Check in for +${nextCheckInReward(g.save, now)} today.`, 8);
+    }
+    g.save = { ...g.save, lastSeenAt: now };
     persistSave(g.save);
-    if (arrival.earned > 0) showNotice(g, `YOUR REEF GREW WHILE YOU WERE AWAY — +${arrival.earned} Reef Token${arrival.earned === 1 ? "" : "s"}`, 8);
     runtimeRef.current = g;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate the UI from the persisted canvas runtime once on mount.
     syncUi(g);
@@ -932,6 +955,7 @@ export default function FoodRunGame() {
       if (g.phase !== "playing" || g.paused || g.inventory) return;
       g.elapsed += dt;
       g.run.duration = g.elapsed;
+      g.playSecondsPending += dt;
       g.player.invulnerable = Math.max(0, g.player.invulnerable - dt);
       g.player.whaleShield = Math.max(0, g.player.whaleShield - dt);
       g.player.hazardCooldown = Math.max(0, g.player.hazardCooldown - dt);
@@ -1742,6 +1766,17 @@ export default function FoodRunGame() {
       g.uiClock += dt;
       if (g.uiClock > 0.11) {
         g.uiClock = 0;
+        if (g.playSecondsPending > 0) {
+          const minted = earnPlaytimeTokens(g.save, g.playSecondsPending, Date.now());
+          g.playSecondsPending = 0;
+          if (minted.save !== g.save) g.save = minted.save;
+          if (minted.minted > 0) {
+            g.floaters.push({ x: g.player.x, y: g.player.y - 50, text: `+${minted.minted} 🪸 REEF TOKEN`, color: "#ffd75f", life: 2.2 });
+            showNotice(g, `+${minted.minted} Reef Token earned in the water!`, 2.6);
+            audioCue("bank", g.save.settings.sound);
+            persistSave(g.save);
+          }
+        }
         syncUi(g);
       }
       frame = requestAnimationFrame(loop);
@@ -1963,7 +1998,7 @@ export default function FoodRunGame() {
               const school = ui.save.schools[schoolId];
               const goal = schoolFoodGoal(schoolId, school.level);
               return <div key={schoolId} className="school-choice static">
-                <span className="eyebrow">{SCHOOLS[schoolId].location} · {SCHOOLS[schoolId].specialty}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level · +{(school.level * 0.1).toFixed(1)} 🪸/hr</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
+                <span className="eyebrow">{SCHOOLS[schoolId].location} · {SCHOOLS[schoolId].specialty}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
                 <span className="school-perks">
                   {SCHOOL_PERKS[schoolId].map((perk) => (
                     <span key={perk.name} className={school.level >= perk.level ? "on" : ""}>
@@ -2020,15 +2055,20 @@ export default function FoodRunGame() {
             <article className="reef-card token-card">
               <div className="eyebrow">REEF TOKENS</div>
               <strong>🪸 {ui.save.reefTokens}</strong>
-              <small>Your schools generate {tokenRatePerHour(ui.save).toFixed(1)} tokens/hr — even while you are away. Level schools to grow the reef faster.</small>
+              <small>Check in daily to keep your streak — day 1 pays 1 token, day 7 pays 7. After checking in, every hour in the water earns {PLAYTIME_TOKENS_PER_HOUR} more. No play, no pay.</small>
+              <button className={`checkin-button ${ui.checkedInToday ? "done" : ""}`} onClick={checkIn} disabled={ui.checkedInToday}>
+                {ui.checkedInToday
+                  ? `✓ CHECKED IN · DAY ${ui.save.checkInStreak} OF 7`
+                  : `DAILY CHECK-IN · DAY ${ui.nextCheckIn} · +${ui.nextCheckIn} 🪸`}
+              </button>
               {ui.boostActive && (
-                <div className="boost-active">⚡ REEF BOOST +{ui.save.boostPercent}% · {Math.max(1, ui.boostHoursLeft)}h left</div>
+                <div className="boost-active">⚡ REEF BOOST +{ui.save.boostPercent}% · {ui.boostMinutesLeft >= 90 ? `${Math.ceil(ui.boostMinutesLeft / 60)}h` : `${ui.boostMinutesLeft}m`} left</div>
               )}
+              <div className="eyebrow boost-heading">REEF BOOSTS · +10% SCHOOLS AND TOKENS · TIME STACKS</div>
               <div className="boost-row">
                 {REEF_BOOSTS.map((boost) => (
                   <button key={boost.id} className="store-item rarity-uncommon boost-item" onClick={() => buyBoost(boost.id)}>
                     <b>{boost.name}</b>
-                    <small>{boost.hours}H · SCHOOLS + TOKENS</small>
                     <em>🪸 {boost.cost}</em>
                   </button>
                 ))}
@@ -2128,7 +2168,7 @@ export default function FoodRunGame() {
           </div>
           {ui.lastDelivery?.newRecord && <div className="level-up">NEW DISTANCE RECORD · {Math.round(ui.save.stats.maxDistance / 10)}m</div>}
           {(ui.lastDelivery?.achievements ?? []).map((name) => <div key={name} className="level-up">ACHIEVEMENT · {name.toUpperCase()}</div>)}
-          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · your schools generate {tokenRatePerHour(ui.save).toFixed(1)}/hr{ui.boostActive ? ` · BOOST +${ui.save.boostPercent}%` : ""}</div>
+          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · every hour in the water earns {PLAYTIME_TOKENS_PER_HOUR}{ui.boostActive ? ` · BOOST +${ui.save.boostPercent}%` : ""}{ui.checkedInToday ? "" : " · check in at home to start earning"}</div>
           {ui.lastDelivery?.schoolLevelGained && (
             <div className="school-levelup" role="status">
               <span className="school-levelup-bubbles" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</span>

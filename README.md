@@ -11,7 +11,8 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Three ocean zones — Shallow Reef, Kelp Forest, and Deep Water — with escalating danger and food value
 - Two playable fish: the Swift Fish (fast, quick recovery, light bag) and the Forager Fish (slow, wide reach, heavy hauls with bonus deliveries)
 - Four schools to feed, each with a specialty and its own perks: Sunbeam (balanced, home reef), Riptide (speed, kelp forest), Midnight (survival, deep water), and Umbra (stealth, far deep water) — deliver your haul to whichever you reach
-- Reef Tokens: a slow long-term currency generated per school level over real time, including offline (24h cap), never purchasable
+- Reef Tokens: a slow, never-purchasable currency earned by showing up — a 7-day check-in streak pays 1 token on day 1 up to 7 on day 7 (missing a day resets it), and after checking in every hour of actual play earns 0.1 more; nothing accrues while idle
+- Reef Boosts: spend tokens on +10% school-growth-and-token windows from 5 minutes to 24 hours; buying more time stacks
 - A Reef Token store of rarity-tiered fish skins and school themes — cosmetic only, never power
 - Lifetime distance records with in-run "NEW DISTANCE RECORD!" callouts and six modular distance achievements that survive defeat
 - A living ocean: ambient fish schools drift everywhere and scatter from predators, warning you before you see the danger

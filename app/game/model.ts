@@ -210,13 +210,15 @@ export interface SaveData {
   achievements: string[];
   reefTokens: number;
   tokenFraction: number;
-  lastTokenSync: number;
+  checkInStreak: number;
   ownedSkins: string[];
   activeSkin: string;
   ownedThemes: string[];
   activeTheme: string;
   boostPercent: number;
   boostExpiresAt: number;
+  lastSeenAt: number;
+  lastCheckInDay: string;
   settings: {
     reducedMotion: boolean;
     highContrast: boolean;
@@ -259,41 +261,66 @@ export const DEEP_SCHOOL = SCHOOLS.deep.position;
 /** Non-reef schools players can physically deliver to (the reef uses the home zone). */
 export const AWAY_SCHOOLS: SchoolId[] = ["riptide", "deep", "umbra"];
 
-export const OFFLINE_TOKEN_CAP_HOURS = 24;
+/** The economy is deliberately slow: tokens are earned by showing up and playing, never by idling. */
+export const PLAYTIME_TOKENS_PER_HOUR = 0.1;
+export const CHECK_IN_CYCLE_DAYS = 7;
 
-/** The economy is deliberately slow: tokens should feel earned, not farmed. */
-export const TOKENS_PER_LEVEL_PER_HOUR = 0.1;
-
-/** Reef Tokens per hour: 0.1 per school level, summed across every school. */
-export const tokenRatePerHour = (save: SaveData) =>
-  (Object.values(save.schools) as SchoolProgress[]).reduce((total, school) => total + school.level, 0) * TOKENS_PER_LEVEL_PER_HOUR;
-
-/** Purchasable, time-limited boosts: a token sink that speeds the reef itself up. */
+/**
+ * Purchasable, time-limited +10% boosts: a token sink that speeds the reef up.
+ * Longer windows give better value per minute; buying extends an active boost.
+ */
+export const BOOST_PERCENT = 10;
 export const REEF_BOOSTS = [
-  { id: "boost-5", name: "Reef Boost +5%", percent: 5, cost: 5, hours: 24 },
-  { id: "boost-10", name: "Reef Boost +10%", percent: 10, cost: 9, hours: 24 },
+  { id: "boost-5m", name: "5 MIN", cost: 1, minutes: 5 },
+  { id: "boost-10m", name: "10 MIN", cost: 2, minutes: 10 },
+  { id: "boost-15m", name: "15 MIN", cost: 3, minutes: 15 },
+  { id: "boost-1h", name: "1 HOUR", cost: 5, minutes: 60 },
+  { id: "boost-4h", name: "4 HOURS", cost: 8, minutes: 240 },
+  { id: "boost-12h", name: "12 HOURS", cost: 12, minutes: 720 },
+  { id: "boost-24h", name: "24 HOURS", cost: 18, minutes: 1440 },
 ] as const;
 
 export const getBoostMultiplier = (save: SaveData, nowMs: number) =>
   nowMs < save.boostExpiresAt ? 1 + save.boostPercent / 100 : 1;
 
+/** Local calendar-day key used for daily check-ins. */
+export const dayKey = (nowMs: number) => new Date(nowMs).toDateString();
+
+export const hasCheckedInToday = (save: SaveData, nowMs: number) => save.lastCheckInDay === dayKey(nowMs);
+
+/** The reward the NEXT check-in will pay, based on the current streak position. */
+export function nextCheckInReward(save: SaveData, nowMs: number): number {
+  if (hasCheckedInToday(save, nowMs)) return 0;
+  const continues = save.lastCheckInDay === dayKey(nowMs - 86_400_000);
+  return continues ? (save.checkInStreak % CHECK_IN_CYCLE_DAYS) + 1 : 1;
+}
+
 /**
- * Accrues time-based Reef Tokens. Fractional progress is preserved; offline
- * time is capped; an active Reef Boost multiplies the window it covers.
- * A save that has never synced starts its clock without earning.
+ * Daily check-in: day 1 of the streak pays 1 token, rising to 7 by day 7,
+ * then the cycle restarts. Missing a day resets the streak to day 1.
+ * Checking in also unlocks today's playtime earning.
  */
-export function accrueReefTokens(save: SaveData, nowMs: number): { save: SaveData; earned: number } {
-  if (!save.lastTokenSync || nowMs <= save.lastTokenSync) {
-    return { save: { ...save, lastTokenSync: nowMs }, earned: 0 };
-  }
-  const hours = Math.min((nowMs - save.lastTokenSync) / 3_600_000, OFFLINE_TOKEN_CAP_HOURS);
-  const boostedHours = Math.min(Math.max(0, (Math.min(nowMs, save.boostExpiresAt) - save.lastTokenSync) / 3_600_000), hours);
-  const rate = tokenRatePerHour(save);
-  const progress = save.tokenFraction + hours * rate + boostedHours * rate * (save.boostPercent / 100);
-  const earned = Math.floor(progress);
+export function dailyCheckIn(save: SaveData, nowMs: number): { save: SaveData; granted: number; streakDay: number } {
+  if (hasCheckedInToday(save, nowMs)) return { save, granted: 0, streakDay: save.checkInStreak };
+  const granted = nextCheckInReward(save, nowMs);
   return {
-    save: { ...save, reefTokens: save.reefTokens + earned, tokenFraction: progress - earned, lastTokenSync: nowMs },
-    earned,
+    save: { ...save, lastCheckInDay: dayKey(nowMs), checkInStreak: granted, reefTokens: save.reefTokens + granted },
+    granted,
+    streakDay: granted,
+  };
+}
+
+/**
+ * Converts active play time into Reef Tokens (0.1/hour, boosted while a Reef
+ * Boost flows). Only counts after today's check-in; fractions persist.
+ */
+export function earnPlaytimeTokens(save: SaveData, playSeconds: number, nowMs: number): { save: SaveData; minted: number } {
+  if (!hasCheckedInToday(save, nowMs) || playSeconds <= 0) return { save, minted: 0 };
+  const progress = save.tokenFraction + (playSeconds / 3600) * PLAYTIME_TOKENS_PER_HOUR * getBoostMultiplier(save, nowMs);
+  const minted = Math.floor(progress);
+  return {
+    save: { ...save, reefTokens: save.reefTokens + minted, tokenFraction: progress - minted },
+    minted,
   };
 }
 
@@ -335,13 +362,15 @@ export const STARTER_SAVE: SaveData = {
   achievements: [],
   reefTokens: 0,
   tokenFraction: 0,
-  lastTokenSync: 0,
+  checkInStreak: 0,
   ownedSkins: ["starter"],
   activeSkin: "starter",
   ownedThemes: ["original"],
   activeTheme: "original",
   boostPercent: 0,
   boostExpiresAt: 0,
+  lastSeenAt: 0,
+  lastCheckInDay: "",
   settings: {
     reducedMotion: false,
     highContrast: false,

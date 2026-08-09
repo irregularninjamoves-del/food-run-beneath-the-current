@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  accrueReefTokens,
   applyRunOutcome,
   AWAY_SCHOOLS,
   bankRunProgress,
+  dailyCheckIn,
   decoySavvyDecay,
   decoySavvyLimit,
   DEEP_SCHOOL,
+  earnPlaytimeTokens,
   getBagCapacity,
   getBoostMultiplier,
   getBubbleDurationMultiplier,
@@ -17,12 +18,12 @@ import {
   getMaxStamina,
   getRareFoodBonus,
   getSonarCooldown,
-  OFFLINE_TOKEN_CAP_HOURS,
+  hasCheckedInToday,
+  nextCheckInReward,
   RunStats,
   SCHOOLS,
   SchoolId,
   STARTER_SAVE,
-  tokenRatePerHour,
   WORLD,
   xpForLevel,
   zoneForChunk,
@@ -251,38 +252,63 @@ test("four schools ladder outward with distinct specialties", () => {
   assert.equal(zoneForX(SCHOOLS.umbra.position.x).id, "deep");
 });
 
-test("reef tokens accrue slowly from school levels over real time with an offline cap", () => {
-  const save = structuredClone(STARTER_SAVE);
-  assert.equal(tokenRatePerHour(save), 0.4, "four level-1 schools generate 0.4 tokens/hr");
-  const started = accrueReefTokens(save, 1_000_000);
-  assert.equal(started.earned, 0, "the first sync only starts the clock");
-  const after150min = accrueReefTokens(started.save, 1_000_000 + 150 * 60_000);
-  assert.equal(after150min.earned, 1, "0.4/hr earns 1 token in 2.5 hours");
-  const after20min = accrueReefTokens(started.save, 1_000_000 + 20 * 60_000);
-  assert.equal(after20min.earned, 0, "short sessions bank fractions, not tokens");
-  assert.ok(after20min.save.tokenFraction > 0.12 && after20min.save.tokenFraction < 0.15, "fractional progress persists");
-  const capped = accrueReefTokens(started.save, 1_000_000 + 1000 * 3_600_000);
-  assert.equal(capped.earned, Math.floor(0.4 * OFFLINE_TOKEN_CAP_HOURS), "offline earnings stop at the cap");
+test("the 7-day check-in ladder pays 1 through 7, resets on misses, then cycles", () => {
+  const DAY = 86_400_000;
+  const start = Date.UTC(2026, 7, 10, 15);
+  let save = structuredClone(STARTER_SAVE);
+  for (let day = 0; day < 9; day += 1) {
+    const result = dailyCheckIn(save, start + day * DAY);
+    const expected = (day % 7) + 1;
+    assert.equal(result.granted, expected, `day ${day + 1} of a perfect streak pays ${expected}`);
+    save = result.save;
+  }
+  assert.equal(save.reefTokens, 28 + 1 + 2, "a perfect week pays 28, then the cycle restarts at 1");
+  const repeat = dailyCheckIn(save, start + 8 * DAY + 60_000);
+  assert.equal(repeat.granted, 0, "checking in twice in one day pays nothing");
+  const lapsed = dailyCheckIn(save, start + 20 * DAY);
+  assert.equal(lapsed.granted, 1, "missing days resets the streak to day 1");
+  assert.ok(hasCheckedInToday(lapsed.save, start + 20 * DAY));
+  assert.equal(nextCheckInReward(lapsed.save, start + 21 * DAY), 2, "tomorrow continues the streak");
 });
 
-test("reef boosts multiply generation only while active and boost deliveries", () => {
-  const boosted = structuredClone(STARTER_SAVE);
-  boosted.boostPercent = 10;
-  boosted.boostExpiresAt = 1_000_000 + 10 * 3_600_000;
-  boosted.lastTokenSync = 1_000_000;
-  assert.equal(getBoostMultiplier(boosted, 1_000_000), 1.1);
-  assert.equal(getBoostMultiplier(boosted, boosted.boostExpiresAt + 1), 1, "expired boosts do nothing");
-  const during = accrueReefTokens(boosted, 1_000_000 + 5 * 3_600_000);
-  assert.ok(Math.abs(during.save.tokenFraction + during.earned - 0.4 * 5 * 1.1) < 1e-9, "boosted hours earn 10% extra");
+test("playtime converts to tokens only after check-in, at 0.1 per hour", () => {
+  const now = Date.UTC(2026, 7, 10, 15);
+  const notCheckedIn = structuredClone(STARTER_SAVE);
+  assert.equal(earnPlaytimeTokens(notCheckedIn, 3600, now).minted, 0, "no check-in, no pay");
+  assert.equal(earnPlaytimeTokens(notCheckedIn, 3600, now).save.tokenFraction, 0, "not even fractions accrue");
+  let save = dailyCheckIn(structuredClone(STARTER_SAVE), now).save;
+  const halfHour = earnPlaytimeTokens(save, 1800, now);
+  assert.ok(Math.abs(halfHour.save.tokenFraction - 0.05) < 1e-9, "30 minutes of play banks 0.05");
+  save = halfHour.save;
+  let minted = 0;
+  for (let i = 0; i < 20; i += 1) {
+    const step = earnPlaytimeTokens(save, 1800, now);
+    minted += step.minted;
+    save = step.minted >= 0 ? step.save : save;
+  }
+  assert.equal(minted, 1, "10.5 hours of play mints exactly 1 token");
+});
+
+test("reef boosts multiply playtime earning and deliveries, and stack duration", () => {
+  const now = Date.UTC(2026, 7, 10, 15);
+  const save = dailyCheckIn(structuredClone(STARTER_SAVE), now).save;
+  save.boostPercent = 10;
+  save.boostExpiresAt = now + 3_600_000;
+  assert.equal(getBoostMultiplier(save, now), 1.1);
+  assert.equal(getBoostMultiplier(save, save.boostExpiresAt + 1), 1, "expired boosts do nothing");
+  const boostedHour = earnPlaytimeTokens(save, 3600, now);
+  assert.ok(Math.abs(boostedHour.save.tokenFraction - 0.11) < 1e-9, "a boosted hour banks 0.11");
   const run: RunStats = { food: 10, salvage: 0, distance: 500, predatorsEscaped: 0, creaturesHelped: 0, rareDiscoveries: 0, duration: 60 };
   const banked = bankRunProgress({ ...structuredClone(STARTER_SAVE), fishType: "swift" }, run, "reef", 1.1);
   assert.equal(banked.foodDelivered, 11, "a +10% boost turns 10 food into 11");
 });
 
-test("cosmetic prices demand real time in the slow economy", () => {
+test("cosmetic prices keep commons attainable and high tiers aspirational", () => {
   for (const item of [...SKINS, ...THEMES]) {
     if (item.cost === 0) continue;
-    assert.ok(item.cost >= 25, `${item.id} should cost at least 25 tokens`);
+    if (item.rarity === "common") assert.ok(item.cost <= 25, `${item.id} should stay attainable`);
+    else if (item.rarity === "uncommon") assert.ok(item.cost >= 50, `${item.id} should take a couple of weeks`);
+    else assert.ok(item.cost >= 200, `${item.id} should be a long-term goal`);
   }
 });
 
