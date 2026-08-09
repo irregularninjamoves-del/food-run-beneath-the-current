@@ -41,6 +41,17 @@ export function createChunk(index: number, runSeed: number): Chunk {
   const sharks: Chunk["sharks"] = [];
   const rocks: Chunk["rocks"] = [];
   const hazards: Chunk["hazards"] = [];
+  const ambient: Chunk["ambient"] = [];
+
+  const ambientCount = 1 + (random() > 0.45 ? 1 : 0);
+  for (let i = 0; i < ambientCount; i++) {
+    ambient.push({
+      x: start + 120 + random() * (WORLD.chunkWidth - 240),
+      y: WORLD.surfaceY + 90 + random() * (WORLD.floorY - WORLD.surfaceY - 220),
+      count: 3 + Math.floor(random() * 4),
+      phase: random() * Math.PI * 2,
+    });
+  }
 
   const coverCount = index === 0 ? 3 : Math.max(2, tuning.coverCount + (random() > 0.55 ? 1 : 0) - (random() > 0.8 ? 1 : 0));
   for (let i = 0; i < coverCount; i++) {
@@ -182,6 +193,7 @@ export function createChunk(index: number, runSeed: number): Chunk {
     sharks,
     rocks,
     hazards,
+    ambient,
     current: index > 1 && random() < currentChance ? (random() > 0.5 ? 1 : -1) * (16 + random() * (zone.id === "deep" ? 30 : 20)) : 0,
   };
 }

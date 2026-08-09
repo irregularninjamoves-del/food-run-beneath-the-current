@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  accrueReefTokens,
+  applyRunOutcome,
+  AWAY_SCHOOLS,
   bankRunProgress,
   decoySavvyDecay,
   decoySavvyLimit,
@@ -13,12 +16,19 @@ import {
   getMaxStamina,
   getRareFoodBonus,
   getSonarCooldown,
+  OFFLINE_TOKEN_CAP_HOURS,
+  RunStats,
+  SCHOOLS,
+  SchoolId,
   STARTER_SAVE,
+  tokenRatePerHour,
   WORLD,
   xpForLevel,
   zoneForChunk,
   zoneForX,
 } from "../app/game/model";
+import { ACHIEVEMENTS, newlyEarnedAchievements } from "../app/game/achievements";
+import { SKINS, THEMES } from "../app/game/cosmetics";
 import { ChunkManager, createChunk } from "../app/game/world";
 import { ENEMY_ARCHETYPES } from "../app/game/enemies";
 import { exclusiveGroupTaken, TALENTS, talentPointsForLevel } from "../app/game/talents";
@@ -224,6 +234,67 @@ test("bubble pearls appear only in deep water and take no bag space", () => {
     }
   }
   assert.ok(found > 0, "deep water must sometimes offer bubble pearls");
+});
+
+test("four schools ladder outward with distinct specialties", () => {
+  const ids = Object.keys(SCHOOLS) as SchoolId[];
+  assert.equal(ids.length, 4);
+  assert.deepEqual(AWAY_SCHOOLS, ["riptide", "deep", "umbra"]);
+  let previousX = -1;
+  for (const id of ids) {
+    assert.ok(SCHOOLS[id].position.x > previousX, "schools must sit progressively farther east");
+    previousX = SCHOOLS[id].position.x;
+    assert.ok(SCHOOLS[id].specialty.length > 0);
+  }
+  assert.equal(zoneForX(SCHOOLS.riptide.position.x).id, "kelp");
+  assert.equal(zoneForX(SCHOOLS.umbra.position.x).id, "deep");
+});
+
+test("reef tokens accrue from school levels over real time with an offline cap", () => {
+  const save = structuredClone(STARTER_SAVE);
+  assert.equal(tokenRatePerHour(save), 4, "four level-1 schools generate 4 tokens/hr");
+  const started = accrueReefTokens(save, 1_000_000);
+  assert.equal(started.earned, 0, "the first sync only starts the clock");
+  const after20min = accrueReefTokens(started.save, 1_000_000 + 20 * 60_000);
+  assert.equal(after20min.earned, 1, "4/hr earns 1 token in 20 minutes");
+  assert.ok(after20min.save.tokenFraction > 0.3 && after20min.save.tokenFraction < 0.34, "fractional progress persists");
+  const capped = accrueReefTokens(started.save, 1_000_000 + 1000 * 3_600_000);
+  assert.equal(capped.earned, 4 * OFFLINE_TOKEN_CAP_HOURS, "offline earnings stop at the cap");
+});
+
+test("run outcomes update lifetime records and preserve progress on failure", () => {
+  const run: RunStats = { food: 5, salvage: 0, distance: 5200, predatorsEscaped: 0, creaturesHelped: 0, rareDiscoveries: 0, duration: 60 };
+  const base = structuredClone(STARTER_SAVE);
+  base.reefTokens = 9;
+  base.achievements = ["first-swim"];
+  const failed = applyRunOutcome(base, run, false);
+  assert.equal(failed.save.stats.failedRuns, 1);
+  assert.equal(failed.save.stats.maxDistance, 5200, "records persist even on failure");
+  assert.equal(failed.save.reefTokens, 9, "failure never takes earned tokens");
+  assert.ok(failed.save.achievements.includes("getting-brave"), "distance achievements land on failure too");
+  const better = applyRunOutcome(failed.save, { ...run, distance: 6100 }, true);
+  assert.equal(better.newRecord, true);
+  assert.equal(better.save.stats.longestExtraction, 6100);
+});
+
+test("achievements are modular and threshold-ordered", () => {
+  assert.ok(ACHIEVEMENTS.length >= 6);
+  assert.equal(new Set(ACHIEVEMENTS.map((def) => def.id)).size, ACHIEVEMENTS.length, "achievement ids must be unique");
+  const earned = newlyEarnedAchievements([], { maxDistance: 10000 });
+  assert.deepEqual(earned.map((def) => def.id), ["first-swim", "getting-brave", "beyond-the-reef"]);
+  assert.deepEqual(newlyEarnedAchievements(earned.map((def) => def.id), { maxDistance: 10000 }), [], "already-earned achievements never repeat");
+});
+
+test("cosmetics are valid, priced by rarity, and never free except starters", () => {
+  for (const list of [SKINS, THEMES] as const) {
+    assert.equal(new Set(list.map((item) => item.id)).size, list.length, "cosmetic ids must be unique");
+    for (const item of list) {
+      if (item.id === "starter" || item.id === "original") assert.equal(item.cost, 0);
+      else assert.ok(item.cost > 0, `${item.id} must cost tokens`);
+    }
+  }
+  assert.ok(STARTER_SAVE.ownedSkins.includes("starter"));
+  assert.ok(STARTER_SAVE.ownedThemes.includes("original"));
 });
 
 test("only one bubble craft can ever be chosen", () => {

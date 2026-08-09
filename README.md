@@ -10,7 +10,11 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Keyboard and responsive touch controls
 - Three ocean zones — Shallow Reef, Kelp Forest, and Deep Water — with escalating danger and food value
 - Two playable fish: the Swift Fish (fast, quick recovery, light bag) and the Forager Fish (slow, wide reach, heavy hauls with bonus deliveries)
-- Two schools to feed: Sunbeam Shoal at the home reef and Midnight Shoal far out in deep water — deliver your haul to whichever you reach
+- Four schools to feed, each with a specialty and its own perks: Sunbeam (balanced, home reef), Riptide (speed, kelp forest), Midnight (survival, deep water), and Umbra (stealth, far deep water) — deliver your haul to whichever you reach
+- Reef Tokens: a slow long-term currency generated per school level over real time, including offline (24h cap), never purchasable
+- A Reef Token store of rarity-tiered fish skins and school themes — cosmetic only, never power
+- Lifetime distance records with in-run "NEW DISTANCE RECORD!" callouts and six modular distance achievements that survive defeat
+- A living ocean: ambient fish schools drift everywhere and scatter from predators, warning you before you see the danger
 - School levels grow the population on screen and unlock real perks (extra decoys, stamina, hearts, richer rare food, faster sonar, cheaper bursts)
 - Common, uncommon, and rare food tiers; rare glowfruit clusters near predator territory
 - Spendable noncombat talents across stealth, gathering, voyage, and bubble-craft currents

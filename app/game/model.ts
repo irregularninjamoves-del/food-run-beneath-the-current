@@ -1,3 +1,4 @@
+import { newlyEarnedAchievements, type AchievementDef } from "./achievements";
 import type { EnemyKind, EnemyTier } from "./enemies";
 import type { TalentId } from "./talents";
 
@@ -13,7 +14,7 @@ export type PredatorState =
 
 export type PickupKind = "food" | "junk" | "bubble";
 export type FishType = "swift" | "forager";
-export type SchoolId = "reef" | "deep";
+export type SchoolId = "reef" | "riptide" | "deep" | "umbra";
 
 export const FISH_TYPES: Record<FishType, {
   name: string;
@@ -44,9 +45,37 @@ export const FISH_TYPES: Record<FishType, {
   },
 };
 
-export const SCHOOLS: Record<SchoolId, { name: string; location: string; requiredBase: number; description: string }> = {
-  reef: { name: "Sunbeam Shoal", location: "Shallow Reef", requiredBase: 12, description: "A safe young school learning to thrive." },
-  deep: { name: "Midnight Shoal", location: "Deep Water", requiredBase: 20, description: "A distant school surviving beyond the kelp." },
+export interface SchoolDef {
+  name: string;
+  location: string;
+  requiredBase: number;
+  description: string;
+  specialty: string;
+  position: { x: number; y: number };
+  color: string;
+}
+
+export const SCHOOLS: Record<SchoolId, SchoolDef> = {
+  reef: {
+    name: "Sunbeam Shoal", location: "Shallow Reef", requiredBase: 12,
+    description: "A safe young school learning to thrive.", specialty: "Balanced — decoys, stamina, hearts",
+    position: { x: 120, y: 540 }, color: "#ffd75f",
+  },
+  riptide: {
+    name: "Riptide Shoal", location: "Kelp Forest", requiredBase: 16,
+    description: "Restless drifters who live for the rush of the current.", specialty: "Speed — swim, burst, stamina",
+    position: { x: 3400, y: 380 }, color: "#73d9e3",
+  },
+  deep: {
+    name: "Midnight Shoal", location: "Deep Water", requiredBase: 20,
+    description: "A distant school surviving beyond the kelp.", specialty: "Survival — rare food, sonar, bursts",
+    position: { x: 5800, y: 390 }, color: "#78d7ca",
+  },
+  umbra: {
+    name: "Umbra Shoal", location: "Far Deep Water", requiredBase: 26,
+    description: "Half-seen shapes that slip between the shadows.", specialty: "Stealth — dull predator senses",
+    position: { x: 8200, y: 400 }, color: "#c39bf0",
+  },
 };
 
 export interface SchoolProgress { level: number; food: number; population: number; }
@@ -60,11 +89,23 @@ export const SCHOOL_PERKS: Record<SchoolId, SchoolPerkDef[]> = {
     { level: 4, name: "Guardian Bond", description: "+1 heart every dive" },
     { level: 5, name: "Resonant Pop", description: "Bubble pops reach 40% farther" },
   ],
+  riptide: [
+    { level: 2, name: "Slipcurrent", description: "Swim speed +4%" },
+    { level: 3, name: "Tailwind", description: "Burst speed +8%" },
+    { level: 4, name: "Second Wind", description: "Stamina recovers 20% faster" },
+    { level: 5, name: "Eye of the Storm", description: "Currents push you 25% less" },
+  ],
   deep: [
     { level: 2, name: "Glow Harvest", description: "Rare food is worth +1" },
     { level: 3, name: "Echo Tuning", description: "Sonar recharges 3s sooner" },
     { level: 4, name: "Abyss Grace", description: "Bursting drains 20% less stamina" },
     { level: 5, name: "Deep Charge", description: "Bubble craft effects last 50% longer" },
+  ],
+  umbra: [
+    { level: 2, name: "Soft Fins", description: "Predator hearing −10%" },
+    { level: 3, name: "Dusk Veil", description: "Predator sight −8%" },
+    { level: 4, name: "Night Cache", description: "+1 bubble decoy every dive" },
+    { level: 5, name: "Umbral Skin", description: "Bursting is 25% quieter" },
   ],
 };
 
@@ -130,6 +171,8 @@ export interface Chunk {
   sharks: Shark[];
   rocks: { x: number; y: number; r: number; variant: number }[];
   hazards: Hazard[];
+  /** Ambient schools of tiny fish; they scatter from predators as a living warning. */
+  ambient: { x: number; y: number; count: number; phase: number }[];
   current: number;
 }
 
@@ -141,6 +184,13 @@ export interface RunStats {
   creaturesHelped: number;
   rareDiscoveries: number;
   duration: number;
+}
+
+export interface LifetimeStats {
+  maxDistance: number;
+  totalDistance: number;
+  longestExtraction: number;
+  failedRuns: number;
 }
 
 export interface SaveData {
@@ -156,6 +206,15 @@ export interface SaveData {
   selectedSchool: SchoolId;
   schools: Record<SchoolId, SchoolProgress>;
   unlockedTalents: TalentId[];
+  stats: LifetimeStats;
+  achievements: string[];
+  reefTokens: number;
+  tokenFraction: number;
+  lastTokenSync: number;
+  ownedSkins: string[];
+  activeSkin: string;
+  ownedThemes: string[];
+  activeTheme: string;
   settings: {
     reducedMotion: boolean;
     highContrast: boolean;
@@ -193,7 +252,49 @@ export function zoneForX(x: number): ZoneDef {
 
 export const zoneForChunk = (index: number) => zoneForX(index * WORLD.chunkWidth + WORLD.chunkWidth / 2);
 
-export const DEEP_SCHOOL = { x: 5800, y: 390 };
+export const DEEP_SCHOOL = SCHOOLS.deep.position;
+
+/** Non-reef schools players can physically deliver to (the reef uses the home zone). */
+export const AWAY_SCHOOLS: SchoolId[] = ["riptide", "deep", "umbra"];
+
+export const OFFLINE_TOKEN_CAP_HOURS = 24;
+
+/** Reef Tokens per hour: one per school level, summed across every school. */
+export const tokenRatePerHour = (save: SaveData) =>
+  (Object.values(save.schools) as SchoolProgress[]).reduce((total, school) => total + school.level, 0);
+
+/**
+ * Accrues time-based Reef Tokens. Fractional progress is preserved; offline
+ * time is capped. A save that has never synced starts its clock without earning.
+ */
+export function accrueReefTokens(save: SaveData, nowMs: number): { save: SaveData; earned: number } {
+  if (!save.lastTokenSync || nowMs <= save.lastTokenSync) {
+    return { save: { ...save, lastTokenSync: nowMs }, earned: 0 };
+  }
+  const hours = Math.min((nowMs - save.lastTokenSync) / 3_600_000, OFFLINE_TOKEN_CAP_HOURS);
+  const progress = save.tokenFraction + hours * tokenRatePerHour(save);
+  const earned = Math.floor(progress);
+  return {
+    save: { ...save, reefTokens: save.reefTokens + earned, tokenFraction: progress - earned, lastTokenSync: nowMs },
+    earned,
+  };
+}
+
+/** Applies end-of-run lifetime stats and returns any newly earned achievements. */
+export function applyRunOutcome(save: SaveData, run: RunStats, success: boolean): { save: SaveData; newRecord: boolean; earnedAchievements: AchievementDef[] } {
+  const stats = { ...save.stats };
+  stats.totalDistance += run.distance;
+  const newRecord = stats.maxDistance > 0 && run.distance > stats.maxDistance;
+  stats.maxDistance = Math.max(stats.maxDistance, run.distance);
+  if (success) stats.longestExtraction = Math.max(stats.longestExtraction, run.distance);
+  else stats.failedRuns += 1;
+  const earnedAchievements = newlyEarnedAchievements(save.achievements, { maxDistance: stats.maxDistance });
+  return {
+    save: { ...save, stats, achievements: [...save.achievements, ...earnedAchievements.map((def) => def.id)] },
+    newRecord,
+    earnedAchievements,
+  };
+}
 
 export const STARTER_SAVE: SaveData = {
   level: 1,
@@ -206,8 +307,22 @@ export const STARTER_SAVE: SaveData = {
   reefLevel: 0,
   fishType: "swift",
   selectedSchool: "reef",
-  schools: { reef: { level: 1, food: 0, population: 8 }, deep: { level: 1, food: 0, population: 5 } },
+  schools: {
+    reef: { level: 1, food: 0, population: 8 },
+    riptide: { level: 1, food: 0, population: 6 },
+    deep: { level: 1, food: 0, population: 5 },
+    umbra: { level: 1, food: 0, population: 4 },
+  },
   unlockedTalents: [],
+  stats: { maxDistance: 0, totalDistance: 0, longestExtraction: 0, failedRuns: 0 },
+  achievements: [],
+  reefTokens: 0,
+  tokenFraction: 0,
+  lastTokenSync: 0,
+  ownedSkins: ["starter"],
+  activeSkin: "starter",
+  ownedThemes: ["original"],
+  activeTheme: "original",
   settings: {
     reducedMotion: false,
     highContrast: false,
@@ -233,7 +348,14 @@ export const getBagCapacity = (save: SaveData) =>
 
 export const getMaxHealth = (save: SaveData) => 3 + (save.schools.reef.level >= 4 ? 1 : 0);
 export const getMaxStamina = (save: SaveData) => 100 + (save.schools.reef.level >= 3 ? 15 : 0);
-export const getDecoyCount = (save: SaveData) => 2 + (save.schools.reef.level >= 2 ? 1 : 0);
+export const getDecoyCount = (save: SaveData) => 2 + (save.schools.reef.level >= 2 ? 1 : 0) + (save.schools.umbra.level >= 4 ? 1 : 0);
+export const getSchoolSpeedMultiplier = (save: SaveData) => (save.schools.riptide.level >= 2 ? 1.04 : 1);
+export const getBurstSpeedMultiplier = (save: SaveData) => (save.schools.riptide.level >= 3 ? 1.08 : 1);
+export const getStaminaRegenMultiplier = (save: SaveData) => (save.schools.riptide.level >= 4 ? 1.2 : 1);
+export const getCurrentResistMultiplier = (save: SaveData) => (save.schools.riptide.level >= 5 ? 0.75 : 1);
+export const getPredatorHearingMultiplier = (save: SaveData) => (save.schools.umbra.level >= 2 ? 0.9 : 1);
+export const getPredatorVisionMultiplier = (save: SaveData) => (save.schools.umbra.level >= 3 ? 0.92 : 1);
+export const getBurstNoiseMultiplier = (save: SaveData) => (save.schools.umbra.level >= 5 ? 0.75 : 1);
 export const getSonarCooldown = (save: SaveData) => (save.schools.deep.level >= 3 ? 5 : 8);
 export const getBurstDrainMultiplier = (save: SaveData) => (save.schools.deep.level >= 4 ? 0.8 : 1);
 export const getRareFoodBonus = (save: SaveData) => (save.schools.deep.level >= 2 ? 1 : 0);
