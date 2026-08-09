@@ -138,6 +138,8 @@ kbd { display: inline-grid; place-items: center; min-width: 28px; height: 25px; 
 .store-item:disabled { opacity: 1; }
 .rarity-common { border-left-color: #9fb9c9; }.rarity-uncommon { border-left-color: #57d98a; }.rarity-rare { border-left-color: #57a8ff; }.rarity-epic { border-left-color: #c06bff; }.rarity-legendary { border-left-color: #ffb03a; }
 .token-line { margin: -6px 0 20px; color: #9fd8cd; font: 700 .66rem var(--font-mono), monospace; letter-spacing: .06em; }
+.boost-active { margin-top: 8px; padding: 6px 10px; color: var(--gold); border: 1px solid rgba(255,214,110,.35); border-radius: 5px; font: 700 .62rem var(--font-mono), monospace; letter-spacing: .06em; }
+.boost-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }.boost-item { border-left-color: var(--gold); }
 .result-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: center; }
 .school-levelup { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 5px; align-items: center; margin: -6px 0 24px; padding: 20px 40px 24px; background: linear-gradient(160deg, rgba(27,179,139,.92), rgba(18,108,142,.94) 55%, rgba(10,61,106,.95)); border: 2px solid rgba(141,255,230,.65); border-radius: 48% 52% 44% 56% / 62% 58% 42% 38%; box-shadow: 0 0 34px rgba(105,240,205,.35), inset 0 0 26px rgba(141,255,230,.18); animation: splashIn .6s cubic-bezier(.2,1.6,.4,1) both, seaRock 3.2s ease-in-out .6s infinite alternate; }
 .school-levelup strong { font: 900 1.5rem var(--font-mono), monospace; letter-spacing: .1em; color: #eafff7; text-shadow: 0 2px 0 rgba(9,64,66,.55), 0 0 18px rgba(141,255,230,.8); animation: seaBob 2.4s ease-in-out infinite; }

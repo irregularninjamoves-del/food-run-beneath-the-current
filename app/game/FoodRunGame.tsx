@@ -11,6 +11,7 @@ import {
   FISH_TYPES,
   FishType,
   getBagCapacity,
+  getBoostMultiplier,
   getBubbleDurationMultiplier,
   getBubbleRadiusMultiplier,
   getBurstDrainMultiplier,
@@ -27,6 +28,7 @@ import {
   getSonarCooldown,
   getStaminaRegenMultiplier,
   Phase,
+  REEF_BOOSTS,
   RunStats,
   SaveData,
   schoolFoodGoal,
@@ -127,6 +129,8 @@ interface UiSnapshot {
   resultXp: number;
   levelGained: boolean;
   lastDelivery: DeliveryReport | null;
+  boostActive: boolean;
+  boostHoursLeft: number;
 }
 
 const emptyRun = (): RunStats => ({
@@ -562,6 +566,7 @@ export default function FoodRunGame() {
       stealth: "CLEAR", threat: "NO CONTACT", bagUsed: 0, bagCapacity: getBagCapacity(save), run: emptyRun(), save,
       tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", zoneName: "Shallow Reef", nearHome: true,
       nearCover: false, nearWhale: false, nearSchool: null, resultXp: 0, levelGained: false, lastDelivery: null,
+      boostActive: false, boostHoursLeft: 0,
     };
   });
 
@@ -612,6 +617,8 @@ export default function FoodRunGame() {
       resultXp: g.resultXp,
       levelGained: g.levelGained,
       lastDelivery: g.lastDelivery,
+      boostActive: Date.now() < g.save.boostExpiresAt,
+      boostHoursLeft: Math.max(0, Math.ceil((g.save.boostExpiresAt - Date.now()) / 3_600_000)),
     });
   }, []);
 
@@ -682,6 +689,31 @@ export default function FoodRunGame() {
     syncUi(g);
   }, [syncUi]);
 
+  const buyBoost = useCallback((boostId: string) => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    const boost = REEF_BOOSTS.find((entry) => entry.id === boostId);
+    if (!boost) return;
+    const now = Date.now();
+    // Settle generation up to this moment so the boost only affects time ahead.
+    g.save = accrueReefTokens(g.save, now).save;
+    if (now < g.save.boostExpiresAt && g.save.boostPercent >= boost.percent) {
+      showNotice(g, "An equal or stronger Reef Boost is already flowing.", 2.2);
+      syncUi(g);
+      return;
+    }
+    if (g.save.reefTokens < boost.cost) {
+      showNotice(g, `Need ${boost.cost - g.save.reefTokens} more Reef Tokens for that boost.`, 2.2);
+      syncUi(g);
+      return;
+    }
+    g.save = { ...g.save, reefTokens: g.save.reefTokens - boost.cost, boostPercent: boost.percent, boostExpiresAt: now + boost.hours * 3_600_000 };
+    persistSave(g.save);
+    showNotice(g, `${boost.name} flowing for ${boost.hours}h — schools grow and tokens flow faster.`, 3);
+    audioCue("bank", g.save.settings.sound);
+    syncUi(g);
+  }, [syncUi]);
+
   const goHome = useCallback(() => {
     const g = runtimeRef.current;
     if (!g) return;
@@ -698,7 +730,7 @@ export default function FoodRunGame() {
   }, [syncUi]);
 
   const bankRun = useCallback((g: Runtime, schoolId: SchoolId) => {
-    const banked = bankRunProgress(g.save, g.run, schoolId);
+    const banked = bankRunProgress(g.save, g.run, schoolId, getBoostMultiplier(g.save, Date.now()));
     const outcome = applyRunOutcome(banked.save, g.run, true);
     const next = accrueReefTokens(outcome.save, Date.now()).save;
     g.levelGained = banked.levelGained;
@@ -1931,7 +1963,7 @@ export default function FoodRunGame() {
               const school = ui.save.schools[schoolId];
               const goal = schoolFoodGoal(schoolId, school.level);
               return <div key={schoolId} className="school-choice static">
-                <span className="eyebrow">{SCHOOLS[schoolId].location} · {SCHOOLS[schoolId].specialty}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level · +{school.level} 🪸/hr</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
+                <span className="eyebrow">{SCHOOLS[schoolId].location} · {SCHOOLS[schoolId].specialty}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level · +{(school.level * 0.1).toFixed(1)} 🪸/hr</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
                 <span className="school-perks">
                   {SCHOOL_PERKS[schoolId].map((perk) => (
                     <span key={perk.name} className={school.level >= perk.level ? "on" : ""}>
@@ -1988,7 +2020,19 @@ export default function FoodRunGame() {
             <article className="reef-card token-card">
               <div className="eyebrow">REEF TOKENS</div>
               <strong>🪸 {ui.save.reefTokens}</strong>
-              <small>Your schools generate {tokenRatePerHour(ui.save)} tokens/hr — even while you are away. Level schools to grow the reef faster.</small>
+              <small>Your schools generate {tokenRatePerHour(ui.save).toFixed(1)} tokens/hr — even while you are away. Level schools to grow the reef faster.</small>
+              {ui.boostActive && (
+                <div className="boost-active">⚡ REEF BOOST +{ui.save.boostPercent}% · {Math.max(1, ui.boostHoursLeft)}h left</div>
+              )}
+              <div className="boost-row">
+                {REEF_BOOSTS.map((boost) => (
+                  <button key={boost.id} className="store-item rarity-uncommon boost-item" onClick={() => buyBoost(boost.id)}>
+                    <b>{boost.name}</b>
+                    <small>{boost.hours}H · SCHOOLS + TOKENS</small>
+                    <em>🪸 {boost.cost}</em>
+                  </button>
+                ))}
+              </div>
               <div className="stat-rows">
                 <span>Best distance <b>{Math.round(ui.save.stats.maxDistance / 10)}m</b></span>
                 <span>Longest safe return <b>{Math.round(ui.save.stats.longestExtraction / 10)}m</b></span>
@@ -2084,7 +2128,7 @@ export default function FoodRunGame() {
           </div>
           {ui.lastDelivery?.newRecord && <div className="level-up">NEW DISTANCE RECORD · {Math.round(ui.save.stats.maxDistance / 10)}m</div>}
           {(ui.lastDelivery?.achievements ?? []).map((name) => <div key={name} className="level-up">ACHIEVEMENT · {name.toUpperCase()}</div>)}
-          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · your schools generate {tokenRatePerHour(ui.save)}/hr</div>
+          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · your schools generate {tokenRatePerHour(ui.save).toFixed(1)}/hr{ui.boostActive ? ` · BOOST +${ui.save.boostPercent}%` : ""}</div>
           {ui.lastDelivery?.schoolLevelGained && (
             <div className="school-levelup" role="status">
               <span className="school-levelup-bubbles" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</span>

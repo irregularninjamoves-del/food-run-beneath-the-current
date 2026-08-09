@@ -9,6 +9,7 @@ import {
   decoySavvyLimit,
   DEEP_SCHOOL,
   getBagCapacity,
+  getBoostMultiplier,
   getBubbleDurationMultiplier,
   getBubbleRadiusMultiplier,
   getDecoyCount,
@@ -250,16 +251,39 @@ test("four schools ladder outward with distinct specialties", () => {
   assert.equal(zoneForX(SCHOOLS.umbra.position.x).id, "deep");
 });
 
-test("reef tokens accrue from school levels over real time with an offline cap", () => {
+test("reef tokens accrue slowly from school levels over real time with an offline cap", () => {
   const save = structuredClone(STARTER_SAVE);
-  assert.equal(tokenRatePerHour(save), 4, "four level-1 schools generate 4 tokens/hr");
+  assert.equal(tokenRatePerHour(save), 0.4, "four level-1 schools generate 0.4 tokens/hr");
   const started = accrueReefTokens(save, 1_000_000);
   assert.equal(started.earned, 0, "the first sync only starts the clock");
+  const after150min = accrueReefTokens(started.save, 1_000_000 + 150 * 60_000);
+  assert.equal(after150min.earned, 1, "0.4/hr earns 1 token in 2.5 hours");
   const after20min = accrueReefTokens(started.save, 1_000_000 + 20 * 60_000);
-  assert.equal(after20min.earned, 1, "4/hr earns 1 token in 20 minutes");
-  assert.ok(after20min.save.tokenFraction > 0.3 && after20min.save.tokenFraction < 0.34, "fractional progress persists");
+  assert.equal(after20min.earned, 0, "short sessions bank fractions, not tokens");
+  assert.ok(after20min.save.tokenFraction > 0.12 && after20min.save.tokenFraction < 0.15, "fractional progress persists");
   const capped = accrueReefTokens(started.save, 1_000_000 + 1000 * 3_600_000);
-  assert.equal(capped.earned, 4 * OFFLINE_TOKEN_CAP_HOURS, "offline earnings stop at the cap");
+  assert.equal(capped.earned, Math.floor(0.4 * OFFLINE_TOKEN_CAP_HOURS), "offline earnings stop at the cap");
+});
+
+test("reef boosts multiply generation only while active and boost deliveries", () => {
+  const boosted = structuredClone(STARTER_SAVE);
+  boosted.boostPercent = 10;
+  boosted.boostExpiresAt = 1_000_000 + 10 * 3_600_000;
+  boosted.lastTokenSync = 1_000_000;
+  assert.equal(getBoostMultiplier(boosted, 1_000_000), 1.1);
+  assert.equal(getBoostMultiplier(boosted, boosted.boostExpiresAt + 1), 1, "expired boosts do nothing");
+  const during = accrueReefTokens(boosted, 1_000_000 + 5 * 3_600_000);
+  assert.ok(Math.abs(during.save.tokenFraction + during.earned - 0.4 * 5 * 1.1) < 1e-9, "boosted hours earn 10% extra");
+  const run: RunStats = { food: 10, salvage: 0, distance: 500, predatorsEscaped: 0, creaturesHelped: 0, rareDiscoveries: 0, duration: 60 };
+  const banked = bankRunProgress({ ...structuredClone(STARTER_SAVE), fishType: "swift" }, run, "reef", 1.1);
+  assert.equal(banked.foodDelivered, 11, "a +10% boost turns 10 food into 11");
+});
+
+test("cosmetic prices demand real time in the slow economy", () => {
+  for (const item of [...SKINS, ...THEMES]) {
+    if (item.cost === 0) continue;
+    assert.ok(item.cost >= 25, `${item.id} should cost at least 25 tokens`);
+  }
 });
 
 test("run outcomes update lifetime records and preserve progress on failure", () => {

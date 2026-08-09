@@ -215,6 +215,8 @@ export interface SaveData {
   activeSkin: string;
   ownedThemes: string[];
   activeTheme: string;
+  boostPercent: number;
+  boostExpiresAt: number;
   settings: {
     reducedMotion: boolean;
     highContrast: boolean;
@@ -259,20 +261,35 @@ export const AWAY_SCHOOLS: SchoolId[] = ["riptide", "deep", "umbra"];
 
 export const OFFLINE_TOKEN_CAP_HOURS = 24;
 
-/** Reef Tokens per hour: one per school level, summed across every school. */
+/** The economy is deliberately slow: tokens should feel earned, not farmed. */
+export const TOKENS_PER_LEVEL_PER_HOUR = 0.1;
+
+/** Reef Tokens per hour: 0.1 per school level, summed across every school. */
 export const tokenRatePerHour = (save: SaveData) =>
-  (Object.values(save.schools) as SchoolProgress[]).reduce((total, school) => total + school.level, 0);
+  (Object.values(save.schools) as SchoolProgress[]).reduce((total, school) => total + school.level, 0) * TOKENS_PER_LEVEL_PER_HOUR;
+
+/** Purchasable, time-limited boosts: a token sink that speeds the reef itself up. */
+export const REEF_BOOSTS = [
+  { id: "boost-5", name: "Reef Boost +5%", percent: 5, cost: 5, hours: 24 },
+  { id: "boost-10", name: "Reef Boost +10%", percent: 10, cost: 9, hours: 24 },
+] as const;
+
+export const getBoostMultiplier = (save: SaveData, nowMs: number) =>
+  nowMs < save.boostExpiresAt ? 1 + save.boostPercent / 100 : 1;
 
 /**
  * Accrues time-based Reef Tokens. Fractional progress is preserved; offline
- * time is capped. A save that has never synced starts its clock without earning.
+ * time is capped; an active Reef Boost multiplies the window it covers.
+ * A save that has never synced starts its clock without earning.
  */
 export function accrueReefTokens(save: SaveData, nowMs: number): { save: SaveData; earned: number } {
   if (!save.lastTokenSync || nowMs <= save.lastTokenSync) {
     return { save: { ...save, lastTokenSync: nowMs }, earned: 0 };
   }
   const hours = Math.min((nowMs - save.lastTokenSync) / 3_600_000, OFFLINE_TOKEN_CAP_HOURS);
-  const progress = save.tokenFraction + hours * tokenRatePerHour(save);
+  const boostedHours = Math.min(Math.max(0, (Math.min(nowMs, save.boostExpiresAt) - save.lastTokenSync) / 3_600_000), hours);
+  const rate = tokenRatePerHour(save);
+  const progress = save.tokenFraction + hours * rate + boostedHours * rate * (save.boostPercent / 100);
   const earned = Math.floor(progress);
   return {
     save: { ...save, reefTokens: save.reefTokens + earned, tokenFraction: progress - earned, lastTokenSync: nowMs },
@@ -323,6 +340,8 @@ export const STARTER_SAVE: SaveData = {
   activeSkin: "starter",
   ownedThemes: ["original"],
   activeTheme: "original",
+  boostPercent: 0,
+  boostExpiresAt: 0,
   settings: {
     reducedMotion: false,
     highContrast: false,
@@ -372,8 +391,8 @@ export const xpForLevel = (level: number) => 80 + (level - 1) * 55;
 export const schoolFoodGoal = (schoolId: SchoolId, level: number) =>
   SCHOOLS[schoolId].requiredBase + (level - 1) * 16;
 
-export function bankRunProgress(save: SaveData, run: RunStats, schoolId: SchoolId = save.selectedSchool) {
-  const foodDelivered = run.food + (save.fishType === "forager" ? Math.floor(run.food / 4) : 0);
+export function bankRunProgress(save: SaveData, run: RunStats, schoolId: SchoolId = save.selectedSchool, boostMultiplier = 1) {
+  const foodDelivered = Math.round((run.food + (save.fishType === "forager" ? Math.floor(run.food / 4) : 0)) * boostMultiplier);
   const earnedXp = Math.round(foodDelivered * 10 + run.salvage * 5 + Math.min(run.distance / 25, 65) + run.creaturesHelped * 18 + run.predatorsEscaped * 9);
   const next = { ...save };
   const school = { ...next.schools[schoolId] };
