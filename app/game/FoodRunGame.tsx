@@ -6,8 +6,14 @@ import {
   AWAY_SCHOOLS,
   bankRunProgress,
   BOOST_PERCENT,
+  buildingFor,
   dailyCheckIn,
+  discoverSchool,
   earnPlaytimeTokens,
+  effectiveTokenRate,
+  foodToWellFed,
+  getHungerSpeedMultiplier,
+  getHungerStaminaBonus,
   decoySavvyDecay,
   decoySavvyLimit,
   FISH_TYPES,
@@ -30,10 +36,18 @@ import {
   getSonarCooldown,
   getStaminaRegenMultiplier,
   hasCheckedInToday,
+  isSchoolActive,
+  PLAYTIME_TOKENS_PER_HOUR,
+  MAX_ACTIVE_SCHOOLS,
+  MEALS_PER_DAY,
+  mealsToday,
   nextCheckInReward,
   Phase,
-  PLAYTIME_TOKENS_PER_HOUR,
   REEF_BOOSTS,
+  schoolHunger,
+  schoolMiles,
+  SCHOOL_ORDER,
+  toggleSchoolSupport,
   RunStats,
   SaveData,
   schoolFoodGoal,
@@ -57,7 +71,7 @@ import { exclusiveGroupTaken, hasTalent, TALENTS, TalentId, talentPointsForLevel
 
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; size: number; kind: "bubble" | "spark" };
 type Floater = { x: number; y: number; text: string; color: string; life: number };
-type DeliveryReport = { schoolId: SchoolId; foodDelivered: number; schoolLevelGained: boolean; population: number; schoolLevel: number; newRecord: boolean; achievements: string[] };
+type DeliveryReport = { schoolId: SchoolId; foodDelivered: number; schoolLevelGained: boolean; population: number; schoolLevel: number; newRecord: boolean; achievements: string[]; mealsToday: number; nowWellFed: boolean; buildingUpgraded: boolean; buildingName: string };
 
 interface Runtime {
   phase: Phase;
@@ -94,6 +108,11 @@ interface Runtime {
   lastDelivery: DeliveryReport | null;
   recordAnnounced: boolean;
   playSecondsPending: number;
+  /** Set when a new school is found mid-run so the banner can celebrate it. */
+  discovery: { schoolId: SchoolId; supported: boolean; life: number } | null;
+  /** Hunger effects, refreshed on the UI tick so the hot loop stays cheap. */
+  hungerSpeed: number;
+  hungerStamina: number;
   scannerCooldown: number;
   scannerPulse: number;
   traps: number;
@@ -138,6 +157,28 @@ interface UiSnapshot {
   boostMinutesLeft: number;
   checkedInToday: boolean;
   nextCheckIn: number;
+  /** Per-school feeding and building state, computed off-render. */
+  schoolStatus: SchoolStatus[];
+  tokenRate: number;
+  discovery: { schoolId: SchoolId; supported: boolean } | null;
+}
+
+interface SchoolStatus {
+  id: SchoolId;
+  discovered: boolean;
+  active: boolean;
+  level: number;
+  population: number;
+  food: number;
+  goal: number;
+  miles: number;
+  meals: number;
+  hungerLabel: string;
+  hungerTier: string;
+  hungerNote: string;
+  foodToWellFed: number;
+  buildingName: string;
+  buildingNextAt: number | null;
 }
 
 const emptyRun = (): RunStats => ({
@@ -189,6 +230,9 @@ function freshRuntime(save: SaveData): Runtime {
     lastDelivery: null,
     recordAnnounced: false,
     playSecondsPending: 0,
+    discovery: null,
+    hungerSpeed: getHungerSpeedMultiplier(save, Date.now()),
+    hungerStamina: getHungerStaminaBonus(save, Date.now()),
     scannerCooldown: 0,
     scannerPulse: 0,
     traps: getDecoyCount(save),
@@ -209,6 +253,104 @@ const distance = (ax: number, ay: number, bx: number, by: number) => Math.hypot(
 function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
+}
+
+/**
+ * A school that grows past level 25 raises a home out of packed sand and living
+ * coral. It grows upward rather than outward — a hut, then a tower, then a
+ * spire — with residents watching the water from arched windows.
+ */
+function drawSchoolBuilding(ctx: CanvasRenderingContext2D, x: number, baseY: number, stories: number, accent: string, time: number) {
+  if (stories <= 0) return;
+  const storyHeight = 44;
+  const baseWidth = 74;
+  const totalHeight = stories * storyHeight;
+  ctx.save();
+
+  // Sand plinth the tower rises from.
+  ctx.fillStyle = "rgba(196,168,116,.55)";
+  ctx.beginPath();
+  ctx.ellipse(x, baseY + 4, baseWidth * 0.78, 13, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Each story tapers slightly, so tall towers read as spires.
+  for (let story = 0; story < stories; story += 1) {
+    const t = story / Math.max(1, stories);
+    const width = baseWidth * (1 - t * 0.28);
+    const top = baseY - (story + 1) * storyHeight;
+    const grad = ctx.createLinearGradient(x - width / 2, top, x + width / 2, top);
+    grad.addColorStop(0, "#c8a970");
+    grad.addColorStop(0.42, "#eddcb4");
+    grad.addColorStop(1, "#b08f57");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.roundRect(x - width / 2, top, width, storyHeight + 1, 7);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(86,62,32,.35)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Coral banding between floors.
+    ctx.strokeStyle = accent;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x - width / 2 + 4, top);
+    ctx.lineTo(x + width / 2 - 4, top);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Two arched windows per floor, with a resident looking out of some.
+    for (let slot = 0; slot < 2; slot += 1) {
+      const wx = x + (slot === 0 ? -1 : 1) * width * 0.22;
+      const wy = top + storyHeight * 0.52;
+      ctx.fillStyle = "rgba(10,38,58,.85)";
+      ctx.beginPath();
+      ctx.roundRect(wx - 9, wy - 11, 18, 21, [9, 9, 3, 3]);
+      ctx.fill();
+      // A fish drifts into the window on a slow, per-window cycle.
+      const cycle = Math.sin(time * 0.9 + story * 1.7 + slot * 2.3);
+      if (cycle > -0.2) {
+        const bob = Math.sin(time * 2 + story + slot) * 1.8;
+        const face = slot === 0 ? -1 : 1;
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.ellipse(wx, wy + bob, 6, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(wx - face * 5, wy + bob);
+        ctx.lineTo(wx - face * 10, wy + bob - 3.4);
+        ctx.lineTo(wx - face * 10, wy + bob + 3.4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#082334";
+        ctx.beginPath();
+        ctx.arc(wx + face * 2.4, wy + bob - 0.8, 1.15, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Coral crown: a small fan of polyps on the roof.
+  const roofY = baseY - totalHeight;
+  const crownWidth = baseWidth * (1 - 0.28) * 0.5;
+  ctx.strokeStyle = accent;
+  ctx.lineCap = "round";
+  ctx.lineWidth = 5;
+  for (let i = 0; i < 4; i += 1) {
+    const lean = (i - 1.5) * 7;
+    ctx.beginPath();
+    ctx.moveTo(x + lean * 0.4, roofY);
+    ctx.quadraticCurveTo(x + lean, roofY - 12, x + lean * 1.5, roofY - 20 - (i % 2) * 6);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.ellipse(x, roofY - 2, crownWidth, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 function drawFish(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, tilt: number, hidden: boolean, shield: boolean, variant: FishType = "swift", skin: SkinColors | null = null) {
@@ -575,6 +717,7 @@ export default function FoodRunGame() {
       tutorialStep: 0, scannerCooldown: 0, traps: 2, notice: "", zoneName: "Shallow Reef", nearHome: true,
       nearCover: false, nearWhale: false, nearSchool: null, resultXp: 0, levelGained: false, lastDelivery: null,
       boostActive: false, boostMinutesLeft: 0, checkedInToday: false, nextCheckIn: 1,
+      schoolStatus: [], tokenRate: PLAYTIME_TOKENS_PER_HOUR, discovery: null,
     };
   });
 
@@ -603,7 +746,7 @@ export default function FoodRunGame() {
       health: g.player.health,
       maxHealth: getMaxHealth(g.save),
       stamina: g.player.stamina,
-      maxStamina: getMaxStamina(g.save),
+      maxStamina: getMaxStamina(g.save) + g.hungerStamina,
       hidden: g.player.hidden,
       stealth,
       threat,
@@ -629,6 +772,30 @@ export default function FoodRunGame() {
       boostMinutesLeft: Math.max(0, Math.ceil((g.save.boostExpiresAt - Date.now()) / 60_000)),
       checkedInToday: hasCheckedInToday(g.save, Date.now()),
       nextCheckIn: nextCheckInReward(g.save, Date.now()),
+      schoolStatus: SCHOOL_ORDER.map((id) => {
+        const school = g.save.schools[id];
+        const hunger = schoolHunger(g.save, id, Date.now());
+        const building = buildingFor(school.level);
+        return {
+          id,
+          discovered: school.discovered,
+          active: isSchoolActive(g.save, id),
+          level: school.level,
+          population: school.population,
+          food: school.food,
+          goal: schoolFoodGoal(id, school.level),
+          miles: schoolMiles(id),
+          meals: mealsToday(school, Date.now()),
+          hungerLabel: hunger.label,
+          hungerTier: hunger.tier,
+          hungerNote: hunger.note,
+          foodToWellFed: foodToWellFed(school, Date.now()),
+          buildingName: building.name,
+          buildingNextAt: building.nextAt,
+        };
+      }),
+      tokenRate: effectiveTokenRate(g.save, Date.now()),
+      discovery: g.discovery && g.discovery.life > 0 ? { schoolId: g.discovery.schoolId, supported: g.discovery.supported } : null,
     });
   }, []);
 
@@ -647,7 +814,9 @@ export default function FoodRunGame() {
     g.phase = "playing";
     g.paused = false;
     g.inventory = false;
-    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: getMaxHealth(g.save), stamina: getMaxStamina(g.save), staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0, hazardCooldown: 0 };
+    g.hungerSpeed = getHungerSpeedMultiplier(g.save, Date.now());
+    g.hungerStamina = getHungerStaminaBonus(g.save, Date.now());
+    g.player = { x: 225, y: 360, vx: 0, vy: 0, facing: 1, health: getMaxHealth(g.save), stamina: getMaxStamina(g.save) + g.hungerStamina, staminaDelay: 0, hidden: false, coverId: null, invulnerable: 0, whaleShield: 0, hazardCooldown: 0 };
     g.cameraX = 0;
     g.elapsed = 0;
     g.run = emptyRun();
@@ -726,6 +895,23 @@ export default function FoodRunGame() {
     syncUi(g);
   }, [syncUi]);
 
+  const toggleSupport = useCallback((id: SchoolId) => {
+    const g = runtimeRef.current;
+    if (!g) return;
+    const result = toggleSchoolSupport(g.save, id);
+    if (result.error) {
+      showNotice(g, result.error, 2.4);
+      syncUi(g);
+      return;
+    }
+    g.save = result.save;
+    g.hungerSpeed = getHungerSpeedMultiplier(g.save, Date.now());
+    g.hungerStamina = getHungerStaminaBonus(g.save, Date.now());
+    persistSave(g.save);
+    showNotice(g, isSchoolActive(g.save, id) ? `Now supporting ${SCHOOLS[id].name}.` : `No longer supporting ${SCHOOLS[id].name}.`, 2.2);
+    syncUi(g);
+  }, [syncUi]);
+
   const checkIn = useCallback(() => {
     const g = runtimeRef.current;
     if (!g) return;
@@ -754,7 +940,8 @@ export default function FoodRunGame() {
   }, [syncUi]);
 
   const bankRun = useCallback((g: Runtime, schoolId: SchoolId) => {
-    const banked = bankRunProgress(g.save, g.run, schoolId, getBoostMultiplier(g.save, Date.now()));
+    const now = Date.now();
+    const banked = bankRunProgress(g.save, g.run, schoolId, getBoostMultiplier(g.save, now), now);
     const outcome = applyRunOutcome(banked.save, g.run, true);
     const next = { ...outcome.save, lastSeenAt: Date.now() };
     g.levelGained = banked.levelGained;
@@ -769,11 +956,22 @@ export default function FoodRunGame() {
       schoolLevel: next.schools[schoolId].level,
       newRecord: outcome.newRecord || (g.recordAnnounced && g.run.distance >= next.stats.maxDistance),
       achievements: outcome.earnedAchievements.map((def) => def.name),
+      mealsToday: banked.mealsToday,
+      nowWellFed: banked.nowWellFed,
+      buildingUpgraded: banked.buildingUpgraded,
+      buildingName: banked.building.name,
     };
     for (let i = 0; i < 26; i++) {
       g.particles.push({ x: g.player.x, y: g.player.y, vx: (Math.random() - 0.5) * 190, vy: (Math.random() - 0.7) * 160, life: 0.7 + Math.random() * 0.7, size: 2 + Math.random() * 4, kind: "spark" });
     }
-    showNotice(g, `${banked.foodDelivered} food fed to ${SCHOOLS[schoolId].name}${banked.schoolLevelGained ? " — the school grew!" : ""}`, 3);
+    const deliveryTail = banked.buildingUpgraded
+      ? ` — they raised a ${banked.building.name}!`
+      : banked.nowWellFed
+        ? " — the school is well fed!"
+        : banked.schoolLevelGained
+          ? " — the school grew!"
+          : "";
+    showNotice(g, `${banked.foodDelivered} food fed to ${SCHOOLS[schoolId].name}${deliveryTail}`, 3);
     g.phase = "results";
     g.paused = false;
     g.inventory = false;
@@ -1079,7 +1277,7 @@ export default function FoodRunGame() {
       const loadRatio = g.bagUsed / getBagCapacity(g.save);
       const loadPenalty = 1 - Math.max(0, loadRatio - 0.6) * 0.18;
       const fish = FISH_TYPES[g.save.fishType];
-      const talentSpeed = (hasTalent(g.save.unlockedTalents, "current-rider") ? 1.08 : 1) * getSchoolSpeedMultiplier(g.save);
+      const talentSpeed = (hasTalent(g.save.unlockedTalents, "current-rider") ? 1.08 : 1) * getSchoolSpeedMultiplier(g.save) * g.hungerSpeed;
       const burstBonus = wantsBurst ? getBurstSpeedMultiplier(g.save) : 1;
       const accel = (wantsBurst ? 530 : 262) * loadPenalty * fish.speed * talentSpeed * burstBonus;
       const maxSpeed = (wantsBurst ? 300 : 150) * loadPenalty * fish.speed * talentSpeed * burstBonus;
@@ -1106,7 +1304,7 @@ export default function FoodRunGame() {
         if (Math.random() < dt * 22) g.particles.push({ x: g.player.x - g.player.facing * 22, y: g.player.y + (Math.random() - 0.5) * 18, vx: -g.player.facing * (45 + Math.random() * 30), vy: -14 - Math.random() * 18, life: 0.8, size: 2 + Math.random() * 4, kind: "bubble" });
       } else {
         g.player.staminaDelay -= dt;
-        if (g.player.staminaDelay <= 0) g.player.stamina = Math.min(getMaxStamina(g.save), g.player.stamina + 22 * fish.staminaRegen * getStaminaRegenMultiplier(g.save) * dt);
+        if (g.player.staminaDelay <= 0) g.player.stamina = Math.min(getMaxStamina(g.save) + g.hungerStamina, g.player.stamina + 22 * fish.staminaRegen * getStaminaRegenMultiplier(g.save) * dt);
       }
 
       const playerChunk = g.chunks.chunks.get(Math.floor(g.player.x / WORLD.chunkWidth));
@@ -1493,10 +1691,16 @@ export default function FoodRunGame() {
           ctx.quadraticCurveTo(rx - 12, WORLD.floorY - rh * 0.55, rx + Math.sin(i) * 18, WORLD.floorY - rh);
           ctx.stroke();
         }
+        const homeBuilding = buildingFor(g.save.schools.reef.level);
+        drawSchoolBuilding(ctx, hx + 120, WORLD.floorY - 6, homeBuilding.stories, reefColors[0], g.elapsed);
         ctx.fillStyle = findTheme(g.save.activeTheme).label;
         ctx.font = "800 12px var(--font-mono), monospace";
         ctx.textAlign = "center";
         ctx.fillText("HOME REEF", hx + 120, 455);
+        if (homeBuilding.tier > 0) {
+          ctx.font = "700 10px monospace";
+          ctx.fillText(homeBuilding.name.toUpperCase(), hx + 120, 469);
+        }
         for (let i = 0; i < Math.min(21, 5 + g.save.reefLevel * 2); i++) {
           drawFish(ctx, hx + 75 + (i % 4) * 38, 500 + Math.floor(i / 4) * 40 + Math.sin(g.elapsed + i) * 7, i % 2 ? -1 : 1, 0, false, false);
         }
@@ -1523,10 +1727,16 @@ export default function FoodRunGame() {
             ctx.arc(schoolX, def.position.y, 150 + Math.sin(g.elapsed * 3) * 8, 0, Math.PI * 2);
             ctx.stroke();
           }
+          const awayBuilding = buildingFor(school.level);
+          drawSchoolBuilding(ctx, schoolX, def.position.y + 96, awayBuilding.stories, def.color, g.elapsed);
           ctx.fillStyle = def.color;
           ctx.font = "700 12px monospace";
           ctx.textAlign = "center";
           ctx.fillText(`${def.name.toUpperCase()} · LV ${school.level}`, schoolX, def.position.y - 105);
+          ctx.font = "700 10px monospace";
+          ctx.globalAlpha = 0.75;
+          ctx.fillText(awayBuilding.tier > 0 ? awayBuilding.name.toUpperCase() : `${schoolMiles(awayId)} MILES OUT`, schoolX, def.position.y - 91);
+          ctx.globalAlpha = 1;
           for (let i = 0; i < Math.min(26, 4 + school.population); i++) {
             const orbit = g.elapsed * 0.8 + i * 0.7;
             drawFish(ctx, schoolX + Math.cos(orbit) * (62 + (i % 3) * 14), def.position.y + Math.sin(orbit * 1.4) * (38 + (i % 2) * 13), i % 2 ? -1 : 1, 0, false, false);
@@ -1769,9 +1979,29 @@ export default function FoodRunGame() {
       update(dt, width);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       render(width, height, dpr);
+      // Finding a school is a landmark moment — it announces itself loudly.
+      if (g.discovery) g.discovery.life = Math.max(0, g.discovery.life - dt);
+      for (const id of AWAY_SCHOOLS) {
+        if (g.save.schools[id].discovered) continue;
+        if (distance(g.player.x, g.player.y, SCHOOLS[id].position.x, SCHOOLS[id].position.y) > 340) continue;
+        const found = discoverSchool(g.save, id);
+        if (!found.discovered) continue;
+        g.save = found.save;
+        persistSave(g.save);
+        g.discovery = { schoolId: id, supported: found.autoSupported, life: 6 };
+        g.shake = Math.max(g.shake, 0.35);
+        for (let i = 0; i < 30; i++) {
+          g.particles.push({ x: SCHOOLS[id].position.x, y: SCHOOLS[id].position.y, vx: (Math.random() - 0.5) * 210, vy: (Math.random() - 0.7) * 180, life: 0.9 + Math.random() * 0.8, size: 2 + Math.random() * 4, kind: "spark" });
+        }
+        audioCue("bank", g.save.settings.sound);
+        gameAudio.playCreature("dolphin", g.save.settings.sound);
+      }
+
       g.uiClock += dt;
       if (g.uiClock > 0.11) {
         g.uiClock = 0;
+        g.hungerSpeed = getHungerSpeedMultiplier(g.save, Date.now());
+        g.hungerStamina = getHungerStaminaBonus(g.save, Date.now());
         if (g.playSecondsPending > 0) {
           const minted = earnPlaytimeTokens(g.save, g.playSecondsPending, Date.now());
           g.playSecondsPending = 0;
@@ -1946,6 +2176,17 @@ export default function FoodRunGame() {
           {(ui.nearSchool || ui.nearCover || ui.nearWhale) && !ui.paused && !ui.inventory && (
             <div className="action-prompt"><kbd>E</kbd><span>{ui.nearSchool ? `FEED ${SCHOOLS[ui.nearSchool].name.toUpperCase()}` : ui.nearWhale ? "ANSWER WHALE SONG" : ui.hidden ? "LEAVE COVER" : "HIDE IN SEAWEED"}</span></div>
           )}
+          {ui.discovery && (
+            <div className="discovery-banner" role="status">
+              <span className="eyebrow">NEW SCHOOL DISCOVERED</span>
+              <strong>{SCHOOLS[ui.discovery.schoolId].name}</strong>
+              <em>{SCHOOLS[ui.discovery.schoolId].location} · {schoolMiles(ui.discovery.schoolId)} miles from home</em>
+              <p>{SCHOOLS[ui.discovery.schoolId].longTermPerk}</p>
+              <small>{ui.discovery.supported
+                ? "You are now supporting them. Feed them here to grow the school."
+                : `You already support ${MAX_ACTIVE_SCHOOLS} schools — swap one at home to take them on.`}</small>
+            </div>
+          )}
           {ui.notice && <div className="notice">{ui.notice}</div>}
 
           <footer className="controls-strip">
@@ -1999,16 +2240,45 @@ export default function FoodRunGame() {
             <div><div className="eyebrow">SAFE WATER · HOME REEF</div><h2>The school is waiting.</h2><p>Choose your gear, then bring everyone a little more hope.</p></div>
             <div className="level-medallion"><span>LEVEL</span><b>{ui.save.level}</b><small>{ui.save.xp}/{xpTarget} XP</small></div>
           </div>
+          <div className="support-banner">
+            <span className="eyebrow">SUPPORTED SCHOOLS · {ui.save.activeSchools.length}/{MAX_ACTIVE_SCHOOLS}</span>
+            <small>Four schools live in this ocean; you can only support three. Only supported schools grant perks, and only they need feeding — four meals a day keeps them well fed.</small>
+          </div>
           <div className="school-choice-grid" aria-label="School progress">
-            {(Object.keys(SCHOOLS) as SchoolId[]).map((schoolId) => {
-              const school = ui.save.schools[schoolId];
-              const goal = schoolFoodGoal(schoolId, school.level);
-              return <div key={schoolId} className="school-choice static">
-                <span className="eyebrow">{SCHOOLS[schoolId].location} · {SCHOOLS[schoolId].specialty}</span><b>{SCHOOLS[schoolId].name}</b><small>LV {school.level} · {school.population} fish · {school.food}/{goal} food to next level</small><i style={{ width: `${Math.min(100, school.food / goal * 100)}%` }} />
+            {ui.schoolStatus.map((status) => {
+              const def = SCHOOLS[status.id];
+              if (!status.discovered) {
+                return <div key={status.id} className="school-choice static undiscovered">
+                  <span className="eyebrow">UNCHARTED WATER</span>
+                  <b>? ? ?</b>
+                  <small>Something lives {status.miles} miles east. Swim out far enough and you will find it.</small>
+                </div>;
+              }
+              return <div key={status.id} className={`school-choice static ${status.active ? "supported" : "unsupported"}`}>
+                <span className="eyebrow">{def.location} · {status.miles === 0 ? "HOME" : `${status.miles} MILES OUT`}</span>
+                <b>{def.name}</b>
+                <small>LV {status.level} · {status.population} fish · {status.food}/{status.goal} food to next level</small>
+                <i style={{ width: `${Math.min(100, status.food / status.goal * 100)}%` }} />
+                <span className={`hunger-row tier-${status.hungerTier}`}>
+                  <em>{status.hungerLabel}</em>
+                  <span className="meal-pips" aria-label={`${status.meals} of ${MEALS_PER_DAY} meals today`}>
+                    {Array.from({ length: MEALS_PER_DAY }, (_, index) => (
+                      <b key={index} className={index < status.meals ? "on" : ""} />
+                    ))}
+                  </span>
+                  <small>{status.foodToWellFed > 0 ? `${status.foodToWellFed} more food today` : status.hungerNote}</small>
+                </span>
+                <span className="building-row">
+                  🏛 {status.buildingName}
+                  {status.buildingNextAt ? ` · next build at LV ${status.buildingNextAt}` : " · fully raised"}
+                </span>
+                <button className={`support-toggle ${status.active ? "on" : ""}`} onClick={() => toggleSupport(status.id)}>
+                  {status.active ? "✓ SUPPORTING" : "SUPPORT THIS SCHOOL"}
+                </button>
                 <span className="school-perks">
-                  {SCHOOL_PERKS[schoolId].map((perk) => (
-                    <span key={perk.name} className={school.level >= perk.level ? "on" : ""}>
-                      {school.level >= perk.level ? "✓" : `LV${perk.level}`} {perk.name} — {perk.description}
+                  {SCHOOL_PERKS[status.id].map((perk) => (
+                    <span key={perk.name} className={status.active && status.level >= perk.level ? "on" : ""}>
+                      {status.level >= perk.level ? (status.active ? "✓" : "◦") : `LV${perk.level}`} {perk.name} — {perk.description}
                     </span>
                   ))}
                 </span>
@@ -2061,7 +2331,7 @@ export default function FoodRunGame() {
             <article className="reef-card token-card">
               <div className="eyebrow">REEF TOKENS</div>
               <strong>🪸 {ui.save.reefTokens}</strong>
-              <small>Check in daily to keep your streak — day 1 pays 1 token, day 7 pays 7. After checking in, every hour in the water earns {PLAYTIME_TOKENS_PER_HOUR} more. No play, no pay.</small>
+              <small>Check in daily to keep your streak — day 1 pays 1 token, day 7 pays 7. After checking in, every hour in the water earns {ui.tokenRate.toFixed(3)} more (base {PLAYTIME_TOKENS_PER_HOUR}, adjusted by boosts and how well your schools are fed). No play, no pay.</small>
               <button className={`checkin-button ${ui.checkedInToday ? "done" : ""}`} onClick={checkIn} disabled={ui.checkedInToday}>
                 {ui.checkedInToday
                   ? `✓ CHECKED IN · DAY ${ui.save.checkInStreak} OF 7`
@@ -2190,7 +2460,14 @@ export default function FoodRunGame() {
           </div>
           {ui.lastDelivery?.newRecord && <div className="level-up">NEW DISTANCE RECORD · {Math.round(ui.save.stats.maxDistance / 10)}m</div>}
           {(ui.lastDelivery?.achievements ?? []).map((name) => <div key={name} className="level-up">ACHIEVEMENT · {name.toUpperCase()}</div>)}
-          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · every hour in the water earns {PLAYTIME_TOKENS_PER_HOUR}{ui.boostActive ? ` · BOOST +${ui.save.boostPercent}%` : ""}{ui.checkedInToday ? "" : " · check in at home to start earning"}</div>
+          {ui.lastDelivery && (
+            <div className="level-up">
+              MEALS TODAY · {ui.lastDelivery.mealsToday}/{MEALS_PER_DAY}
+              {ui.lastDelivery.nowWellFed ? " · WELL FED, +1% TOKENS" : ""}
+            </div>
+          )}
+          {ui.lastDelivery?.buildingUpgraded && <div className="level-up">THE SCHOOL RAISED A {ui.lastDelivery.buildingName.toUpperCase()}</div>}
+          <div className="token-line">🪸 {ui.save.reefTokens} Reef Tokens · {ui.tokenRate.toFixed(3)}/hr in the water{ui.boostActive ? ` · BOOST +${ui.save.boostPercent}%` : ""}{ui.checkedInToday ? "" : " · check in at home to start earning"}</div>
           {ui.lastDelivery?.schoolLevelGained && (
             <div className="school-levelup" role="status">
               <span className="school-levelup-bubbles" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <i key={i} />)}</span>

@@ -10,8 +10,12 @@ You play a vulnerable reef fish. Swim into procedurally generated water, gather 
 - Keyboard and responsive touch controls
 - Three ocean zones — Shallow Reef, Kelp Forest, and Deep Water — with escalating danger and food value
 - Two playable fish: the Swift Fish (fast, quick recovery, light bag) and the Forager Fish (slow, wide reach, heavy hauls with bonus deliveries)
-- Four schools to feed, each with a specialty and its own perks: Sunbeam (balanced, home reef), Riptide (speed, kelp forest), Midnight (survival, deep water), and Umbra (stealth, far deep water) — deliver your haul to whichever you reach
-- Reef Tokens: a slow, never-purchasable currency earned by showing up — a 7-day check-in streak pays 1 token on day 1 up to 7 on day 7 (missing a day resets it), and after checking in every hour of actual play earns 0.1 more; nothing accrues while idle
+- Four schools spaced a true five miles apart — Sunbeam (home reef), Riptide (5 miles, speed), Midnight (10 miles, survival), and Umbra (15 miles, stealth) — each a longer voyage than the last
+- You can only support three of the four; only supported schools grant perks, so the far shoals are a real trade
+- Reaching an uncharted school triggers a NEW SCHOOL DISCOVERED moment and adopts them if you have a free slot
+- Schools eat four meals a day: four keeps them well fed (+1% Reef Tokens), three is neutral, and fewer costs tokens, swim speed, and stamina until you bring more food
+- Schools build upward as they grow — a Coral Hut at level 25, a Coral Tower at 50, and a Coral Spire at 100, raised from sand and coral with residents watching from the windows
+- Reef Tokens: a slow currency earned by showing up — a 7-day check-in streak pays 1 token on day 1 up to 7 on day 7 (missing a day resets it), and after checking in every hour of actual play earns 0.1 more, scaled by boosts and how well your schools are fed; nothing accrues while idle
 - Reef Boosts: spend tokens on +10% school-growth-and-token windows from 5 minutes to 24 hours; buying more time stacks
 - A Reef Token store of rarity-tiered fish skins and school themes — cosmetic only, never power
 - Lifetime distance records with in-run "NEW DISTANCE RECORD!" callouts and six modular distance achievements that survive defeat

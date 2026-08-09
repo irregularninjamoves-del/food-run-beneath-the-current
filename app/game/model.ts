@@ -45,40 +45,77 @@ export const FISH_TYPES: Record<FishType, {
   },
 };
 
+/**
+ * School geography. Run distance is measured in world units read as meters, so
+ * schools are placed a true five miles apart — every one is a longer expedition
+ * than the last, and the far shoals stay genuinely hard to reach.
+ */
+export const UNITS_PER_MILE = 1609;
+export const SCHOOL_SPACING_MILES = 5;
+export const SCHOOL_SPACING = SCHOOL_SPACING_MILES * UNITS_PER_MILE;
+/** Distance readouts start at the reef mouth, not world zero. */
+export const DISTANCE_ORIGIN = 225;
+
+/** The home reef sits at the mouth; every later school is another 5 miles out. */
+export const schoolPositionX = (index: number) =>
+  index === 0 ? 120 : DISTANCE_ORIGIN + index * SCHOOL_SPACING;
+
 export interface SchoolDef {
   name: string;
   location: string;
   requiredBase: number;
   description: string;
   specialty: string;
+  /** Order from home; also drives the five-mile spacing. */
+  index: number;
   position: { x: number; y: number };
   color: string;
+  /** Why a player would spend one of their three support slots here. */
+  longTermPerk: string;
 }
 
 export const SCHOOLS: Record<SchoolId, SchoolDef> = {
   reef: {
     name: "Sunbeam Shoal", location: "Shallow Reef", requiredBase: 12,
     description: "A safe young school learning to thrive.", specialty: "Balanced — decoys, stamina, hearts",
-    position: { x: 120, y: 540 }, color: "#ffd75f",
+    index: 0, position: { x: schoolPositionX(0), y: 540 }, color: "#ffd75f",
+    longTermPerk: "Reliable, close to home, easy to keep fed.",
   },
   riptide: {
     name: "Riptide Shoal", location: "Kelp Forest", requiredBase: 16,
     description: "Restless drifters who live for the rush of the current.", specialty: "Speed — swim, burst, stamina",
-    position: { x: 3400, y: 380 }, color: "#73d9e3",
+    index: 1, position: { x: schoolPositionX(1), y: 380 }, color: "#73d9e3",
+    longTermPerk: "Five miles out. Faster swimming pays back every run.",
   },
   deep: {
     name: "Midnight Shoal", location: "Deep Water", requiredBase: 20,
     description: "A distant school surviving beyond the kelp.", specialty: "Survival — rare food, sonar, bursts",
-    position: { x: 5800, y: 390 }, color: "#78d7ca",
+    index: 2, position: { x: schoolPositionX(2), y: 390 }, color: "#78d7ca",
+    longTermPerk: "Ten miles out. Richer hauls and longer bubble craft.",
   },
   umbra: {
     name: "Umbra Shoal", location: "Far Deep Water", requiredBase: 26,
     description: "Half-seen shapes that slip between the shadows.", specialty: "Stealth — dull predator senses",
-    position: { x: 8200, y: 400 }, color: "#c39bf0",
+    index: 3, position: { x: schoolPositionX(3), y: 400 }, color: "#c39bf0",
+    longTermPerk: "Fifteen miles out. The hunters stop noticing you at all.",
   },
 };
 
-export interface SchoolProgress { level: number; food: number; population: number; }
+export const SCHOOL_ORDER: SchoolId[] = ["reef", "riptide", "deep", "umbra"];
+
+/** How far out a school sits, in miles, for readable UI. */
+export const schoolMiles = (id: SchoolId) => SCHOOLS[id].index * SCHOOL_SPACING_MILES;
+
+export interface SchoolProgress {
+  level: number;
+  food: number;
+  population: number;
+  /** Food delivered here during `lastFedDay`; drives the meal count. */
+  fedToday: number;
+  lastFedDay: string;
+  lastFedAt: number;
+  discovered: boolean;
+}
 
 export interface SchoolPerkDef { level: number; name: string; description: string }
 
@@ -205,6 +242,8 @@ export interface SaveData {
   fishType: FishType;
   selectedSchool: SchoolId;
   schools: Record<SchoolId, SchoolProgress>;
+  /** Up to three schools you actively support; only these grant perks. */
+  activeSchools: SchoolId[];
   unlockedTalents: TalentId[];
   stats: LifetimeStats;
   achievements: string[];
@@ -242,10 +281,15 @@ export type ZoneId = "reef" | "kelp" | "deep";
 
 export interface ZoneDef { id: ZoneId; name: string; startX: number; hint: string }
 
+/**
+ * Zone bands are stretched to match the five-mile school spacing, so each
+ * school still sits in the water its name promises: Riptide in the kelp at
+ * five miles, Midnight and Umbra in the deep beyond ten.
+ */
 export const ZONES: ZoneDef[] = [
   { id: "reef", name: "Shallow Reef", startX: 0, hint: "common food, gentle water" },
-  { id: "kelp", name: "Kelp Forest", startX: 2700, hint: "richer food, thicker cover, sharper hunters" },
-  { id: "deep", name: "Deep Water", startX: 5400, hint: "rare glowfruit, and the things that guard it" },
+  { id: "kelp", name: "Kelp Forest", startX: 4000, hint: "richer food, thicker cover, sharper hunters" },
+  { id: "deep", name: "Deep Water", startX: 12000, hint: "rare glowfruit, and the things that guard it" },
 ];
 
 export function zoneForX(x: number): ZoneDef {
@@ -288,6 +332,115 @@ export const dayKey = (nowMs: number) => new Date(nowMs).toDateString();
 
 export const hasCheckedInToday = (save: SaveData, nowMs: number) => save.lastCheckInDay === dayKey(nowMs);
 
+// ---------------------------------------------------------------------------
+// Schools you support, how hungry they are, and what they build
+// ---------------------------------------------------------------------------
+
+/** Four schools exist in the ocean; you can only support three at once. */
+export const MAX_ACTIVE_SCHOOLS = 3;
+
+export const isSchoolActive = (save: SaveData, id: SchoolId) => save.activeSchools.includes(id);
+
+export const activeSchoolIds = (save: SaveData): SchoolId[] =>
+  SCHOOL_ORDER.filter((id) => save.activeSchools.includes(id) && save.schools[id].discovered);
+
+/** Perks only flow from schools you actively support — that is the whole trade. */
+const perkLevel = (save: SaveData, id: SchoolId) => (isSchoolActive(save, id) ? save.schools[id].level : 0);
+
+/** A school eats four meals a day; bigger schools need a bigger meal. */
+export const MEALS_PER_DAY = 4;
+export const mealSize = (school: SchoolProgress) => Math.min(16, Math.max(4, Math.round(school.population / 4)));
+
+export type HungerTier = "well-fed" | "fed" | "peckish" | "hungry" | "starving";
+
+export interface HungerEffect {
+  tier: HungerTier;
+  label: string;
+  /** Added to the Reef Token rate multiplier, per supported school. */
+  tokenDelta: number;
+  /** Multiplied into swim speed. */
+  speed: number;
+  /** Flat change to maximum stamina. */
+  stamina: number;
+  note: string;
+}
+
+/**
+ * Deliberately gentle: three meals is neutral, four earns a small bonus, and
+ * an unfed school is a nudge rather than a punishment. Debuffs are recoverable
+ * inside a single session.
+ */
+export const HUNGER: Record<HungerTier, HungerEffect> = {
+  "well-fed": { tier: "well-fed", label: "WELL FED", tokenDelta: 0.01, speed: 1, stamina: 0, note: "+1% Reef Tokens" },
+  fed: { tier: "fed", label: "FED", tokenDelta: 0, speed: 1, stamina: 0, note: "Steady — one more meal earns the bonus" },
+  peckish: { tier: "peckish", label: "PECKISH", tokenDelta: -0.02, speed: 0.98, stamina: 0, note: "−2% tokens · you swim a little heavy" },
+  hungry: { tier: "hungry", label: "HUNGRY", tokenDelta: -0.05, speed: 0.96, stamina: -5, note: "−5% tokens · −5 stamina" },
+  starving: { tier: "starving", label: "NEEDS FOOD", tokenDelta: -0.1, speed: 0.94, stamina: -10, note: "−10% tokens · −10 stamina" },
+};
+
+/** Food delivered here today; yesterday's deliveries do not carry over. */
+export const foodToday = (school: SchoolProgress, nowMs: number) =>
+  school.lastFedDay === dayKey(nowMs) ? school.fedToday : 0;
+
+export const mealsToday = (school: SchoolProgress, nowMs: number) =>
+  Math.min(MEALS_PER_DAY, Math.floor(foodToday(school, nowMs) / mealSize(school)));
+
+export function hungerTier(meals: number): HungerTier {
+  if (meals >= MEALS_PER_DAY) return "well-fed";
+  if (meals === 3) return "fed";
+  if (meals === 2) return "peckish";
+  if (meals === 1) return "hungry";
+  return "starving";
+}
+
+export const schoolHunger = (save: SaveData, id: SchoolId, nowMs: number): HungerEffect =>
+  HUNGER[hungerTier(mealsToday(save.schools[id], nowMs))];
+
+/** Food still owed today before this school is well fed. */
+export const foodToWellFed = (school: SchoolProgress, nowMs: number) =>
+  Math.max(0, MEALS_PER_DAY * mealSize(school) - foodToday(school, nowMs));
+
+/** Hunger across every supported school folds into one token multiplier. */
+export function getHungerTokenMultiplier(save: SaveData, nowMs: number) {
+  const ids = activeSchoolIds(save);
+  if (!ids.length) return 1;
+  let multiplier = 1;
+  for (const id of ids) multiplier += schoolHunger(save, id, nowMs).tokenDelta;
+  return Math.max(0.5, multiplier);
+}
+
+/** A hungry community is a slower one — averaged so one lapse is not crippling. */
+export function getHungerSpeedMultiplier(save: SaveData, nowMs: number) {
+  const ids = activeSchoolIds(save);
+  if (!ids.length) return 1;
+  return ids.reduce((total, id) => total + schoolHunger(save, id, nowMs).speed, 0) / ids.length;
+}
+
+export function getHungerStaminaBonus(save: SaveData, nowMs: number) {
+  const ids = activeSchoolIds(save);
+  if (!ids.length) return 0;
+  return Math.round(ids.reduce((total, id) => total + schoolHunger(save, id, nowMs).stamina, 0) / ids.length);
+}
+
+/** Reef Tokens per hour of play once boosts and hunger are applied. */
+export const effectiveTokenRate = (save: SaveData, nowMs: number) =>
+  PLAYTIME_TOKENS_PER_HOUR * getBoostMultiplier(save, nowMs) * getHungerTokenMultiplier(save, nowMs);
+
+/**
+ * Schools build upward as they grow: a hut at 25, a tower at 50, a spire at
+ * 100. Sand and coral, narrow footprint, fish watching from the windows.
+ */
+export const BUILDING_LEVELS = [25, 50, 100] as const;
+
+export interface BuildingDef { tier: 0 | 1 | 2 | 3; name: string; stories: number; nextAt: number | null }
+
+export function buildingFor(level: number): BuildingDef {
+  if (level >= 100) return { tier: 3, name: "Coral Spire", stories: 5, nextAt: null };
+  if (level >= 50) return { tier: 2, name: "Coral Tower", stories: 3, nextAt: 100 };
+  if (level >= 25) return { tier: 1, name: "Coral Hut", stories: 1, nextAt: 50 };
+  return { tier: 0, name: "Open Shoal", stories: 0, nextAt: 25 };
+}
+
 /** The reward the NEXT check-in will pay, based on the current streak position. */
 export function nextCheckInReward(save: SaveData, nowMs: number): number {
   if (hasCheckedInToday(save, nowMs)) return 0;
@@ -316,7 +469,7 @@ export function dailyCheckIn(save: SaveData, nowMs: number): { save: SaveData; g
  */
 export function earnPlaytimeTokens(save: SaveData, playSeconds: number, nowMs: number): { save: SaveData; minted: number } {
   if (!hasCheckedInToday(save, nowMs) || playSeconds <= 0) return { save, minted: 0 };
-  const progress = save.tokenFraction + (playSeconds / 3600) * PLAYTIME_TOKENS_PER_HOUR * getBoostMultiplier(save, nowMs);
+  const progress = save.tokenFraction + (playSeconds / 3600) * effectiveTokenRate(save, nowMs);
   const minted = Math.floor(progress);
   return {
     save: { ...save, reefTokens: save.reefTokens + minted, tokenFraction: progress - minted },
@@ -352,11 +505,12 @@ export const STARTER_SAVE: SaveData = {
   fishType: "swift",
   selectedSchool: "reef",
   schools: {
-    reef: { level: 1, food: 0, population: 8 },
-    riptide: { level: 1, food: 0, population: 6 },
-    deep: { level: 1, food: 0, population: 5 },
-    umbra: { level: 1, food: 0, population: 4 },
+    reef: { level: 1, food: 0, population: 8, fedToday: 0, lastFedDay: "", lastFedAt: 0, discovered: true },
+    riptide: { level: 1, food: 0, population: 6, fedToday: 0, lastFedDay: "", lastFedAt: 0, discovered: false },
+    deep: { level: 1, food: 0, population: 5, fedToday: 0, lastFedDay: "", lastFedAt: 0, discovered: false },
+    umbra: { level: 1, food: 0, population: 4, fedToday: 0, lastFedDay: "", lastFedAt: 0, discovered: false },
   },
+  activeSchools: ["reef"],
   unlockedTalents: [],
   stats: { maxDistance: 0, totalDistance: 0, longestExtraction: 0, failedRuns: 0 },
   achievements: [],
@@ -394,21 +548,22 @@ export const TUTORIAL_STEPS = [
 export const getBagCapacity = (save: SaveData) =>
   WORLD.baseBagCapacity + save.bagLevel * WORLD.bagCapacityPerLevel + FISH_TYPES[save.fishType].bagBonus + (save.unlockedTalents.includes("deep-pockets") ? 2 : 0);
 
-export const getMaxHealth = (save: SaveData) => 3 + (save.schools.reef.level >= 4 ? 1 : 0);
-export const getMaxStamina = (save: SaveData) => 100 + (save.schools.reef.level >= 3 ? 15 : 0);
-export const getDecoyCount = (save: SaveData) => 2 + (save.schools.reef.level >= 2 ? 1 : 0) + (save.schools.umbra.level >= 4 ? 1 : 0);
-export const getSchoolSpeedMultiplier = (save: SaveData) => (save.schools.riptide.level >= 2 ? 1.04 : 1);
-export const getBurstSpeedMultiplier = (save: SaveData) => (save.schools.riptide.level >= 3 ? 1.08 : 1);
-export const getStaminaRegenMultiplier = (save: SaveData) => (save.schools.riptide.level >= 4 ? 1.2 : 1);
-export const getCurrentResistMultiplier = (save: SaveData) => (save.schools.riptide.level >= 5 ? 0.75 : 1);
-export const getPredatorHearingMultiplier = (save: SaveData) => (save.schools.umbra.level >= 2 ? 0.9 : 1);
-export const getPredatorVisionMultiplier = (save: SaveData) => (save.schools.umbra.level >= 3 ? 0.92 : 1);
-export const getBurstNoiseMultiplier = (save: SaveData) => (save.schools.umbra.level >= 5 ? 0.75 : 1);
-export const getSonarCooldown = (save: SaveData) => (save.schools.deep.level >= 3 ? 5 : 8);
-export const getBurstDrainMultiplier = (save: SaveData) => (save.schools.deep.level >= 4 ? 0.8 : 1);
-export const getRareFoodBonus = (save: SaveData) => (save.schools.deep.level >= 2 ? 1 : 0);
-export const getBubbleRadiusMultiplier = (save: SaveData) => (save.schools.reef.level >= 5 ? 1.4 : 1);
-export const getBubbleDurationMultiplier = (save: SaveData) => (save.schools.deep.level >= 5 ? 1.5 : 1);
+export const getMaxHealth = (save: SaveData) => 3 + (perkLevel(save, "reef") >= 4 ? 1 : 0);
+export const getMaxStamina = (save: SaveData, nowMs = 0) =>
+  100 + (perkLevel(save, "reef") >= 3 ? 15 : 0) + (nowMs ? getHungerStaminaBonus(save, nowMs) : 0);
+export const getDecoyCount = (save: SaveData) => 2 + (perkLevel(save, "reef") >= 2 ? 1 : 0) + (perkLevel(save, "umbra") >= 4 ? 1 : 0);
+export const getSchoolSpeedMultiplier = (save: SaveData) => (perkLevel(save, "riptide") >= 2 ? 1.04 : 1);
+export const getBurstSpeedMultiplier = (save: SaveData) => (perkLevel(save, "riptide") >= 3 ? 1.08 : 1);
+export const getStaminaRegenMultiplier = (save: SaveData) => (perkLevel(save, "riptide") >= 4 ? 1.2 : 1);
+export const getCurrentResistMultiplier = (save: SaveData) => (perkLevel(save, "riptide") >= 5 ? 0.75 : 1);
+export const getPredatorHearingMultiplier = (save: SaveData) => (perkLevel(save, "umbra") >= 2 ? 0.9 : 1);
+export const getPredatorVisionMultiplier = (save: SaveData) => (perkLevel(save, "umbra") >= 3 ? 0.92 : 1);
+export const getBurstNoiseMultiplier = (save: SaveData) => (perkLevel(save, "umbra") >= 5 ? 0.75 : 1);
+export const getSonarCooldown = (save: SaveData) => (perkLevel(save, "deep") >= 3 ? 5 : 8);
+export const getBurstDrainMultiplier = (save: SaveData) => (perkLevel(save, "deep") >= 4 ? 0.8 : 1);
+export const getRareFoodBonus = (save: SaveData) => (perkLevel(save, "deep") >= 2 ? 1 : 0);
+export const getBubbleRadiusMultiplier = (save: SaveData) => (perkLevel(save, "reef") >= 5 ? 1.4 : 1);
+export const getBubbleDurationMultiplier = (save: SaveData) => (perkLevel(save, "deep") >= 5 ? 1.5 : 1);
 
 /** How many pops a hunter falls for before ignoring decoys; smarter tiers wise up sooner. */
 export const decoySavvyLimit = (tier: EnemyTier) => (tier === "minion" ? 4 : 2);
@@ -420,12 +575,27 @@ export const xpForLevel = (level: number) => 80 + (level - 1) * 55;
 export const schoolFoodGoal = (schoolId: SchoolId, level: number) =>
   SCHOOLS[schoolId].requiredBase + (level - 1) * 16;
 
-export function bankRunProgress(save: SaveData, run: RunStats, schoolId: SchoolId = save.selectedSchool, boostMultiplier = 1) {
+export function bankRunProgress(
+  save: SaveData,
+  run: RunStats,
+  schoolId: SchoolId = save.selectedSchool,
+  boostMultiplier = 1,
+  nowMs = 0,
+) {
   const foodDelivered = Math.round((run.food + (save.fishType === "forager" ? Math.floor(run.food / 4) : 0)) * boostMultiplier);
   const earnedXp = Math.round(foodDelivered * 10 + run.salvage * 5 + Math.min(run.distance / 25, 65) + run.creaturesHelped * 18 + run.predatorsEscaped * 9);
   const next = { ...save };
   const school = { ...next.schools[schoolId] };
   school.food += foodDelivered;
+  // Every delivery is also a meal: today's food decides how well fed they are.
+  const mealsBefore = nowMs ? mealsToday(school, nowMs) : 0;
+  if (nowMs && foodDelivered > 0) {
+    const today = dayKey(nowMs);
+    school.fedToday = school.lastFedDay === today ? school.fedToday + foodDelivered : foodDelivered;
+    school.lastFedDay = today;
+    school.lastFedAt = nowMs;
+  }
+  const mealsAfter = nowMs ? mealsToday(school, nowMs) : 0;
   let schoolLevelGained = false;
   while (school.food >= schoolFoodGoal(schoolId, school.level)) {
     school.food -= schoolFoodGoal(schoolId, school.level);
@@ -433,6 +603,7 @@ export function bankRunProgress(save: SaveData, run: RunStats, schoolId: SchoolI
     school.population += schoolId === "reef" ? 5 : 7;
     schoolLevelGained = true;
   }
+  const buildingUpgraded = buildingFor(school.level).tier > buildingFor(next.schools[schoolId].level).tier;
   next.schools = { ...next.schools, [schoolId]: school };
   next.selectedSchool = schoolId;
   next.bankedFood += foodDelivered;
@@ -446,5 +617,49 @@ export function bankRunProgress(save: SaveData, run: RunStats, schoolId: SchoolI
     next.level += 1;
     levelGained = true;
   }
-  return { save: next, earnedXp, levelGained, foodDelivered, schoolLevelGained, schoolId };
+  return {
+    save: next,
+    earnedXp,
+    levelGained,
+    foodDelivered,
+    schoolLevelGained,
+    schoolId,
+    mealsGained: Math.max(0, mealsAfter - mealsBefore),
+    mealsToday: mealsAfter,
+    nowWellFed: mealsBefore < MEALS_PER_DAY && mealsAfter >= MEALS_PER_DAY,
+    buildingUpgraded,
+    building: buildingFor(next.schools[schoolId].level),
+  };
+}
+
+/**
+ * Marks a school as found. The first three you meet become the ones you
+ * support; a fourth has to wait for you to free a slot at home.
+ */
+export function discoverSchool(save: SaveData, id: SchoolId): { save: SaveData; discovered: boolean; autoSupported: boolean } {
+  if (save.schools[id].discovered) return { save, discovered: false, autoSupported: false };
+  const schools = { ...save.schools, [id]: { ...save.schools[id], discovered: true } };
+  const canSupport = save.activeSchools.length < MAX_ACTIVE_SCHOOLS;
+  return {
+    save: {
+      ...save,
+      schools,
+      activeSchools: canSupport ? [...save.activeSchools, id] : save.activeSchools,
+    },
+    discovered: true,
+    autoSupported: canSupport,
+  };
+}
+
+/** Toggles support for a discovered school, respecting the three-slot cap. */
+export function toggleSchoolSupport(save: SaveData, id: SchoolId): { save: SaveData; error: string | null } {
+  if (!save.schools[id].discovered) return { save, error: "You have not found that school yet." };
+  if (save.activeSchools.includes(id)) {
+    if (save.activeSchools.length === 1) return { save, error: "You must support at least one school." };
+    return { save: { ...save, activeSchools: save.activeSchools.filter((entry) => entry !== id) }, error: null };
+  }
+  if (save.activeSchools.length >= MAX_ACTIVE_SCHOOLS) {
+    return { save, error: `You can only support ${MAX_ACTIVE_SCHOOLS} schools — drop one first.` };
+  }
+  return { save: { ...save, activeSchools: [...save.activeSchools, id] }, error: null };
 }
