@@ -48,7 +48,7 @@ import {
   zoneForX,
 } from "./model";
 import { ACHIEVEMENTS, newlyEarnedAchievements } from "./achievements";
-import { findSkin, findTheme, SKINS, THEMES, type SkinColors } from "./cosmetics";
+import { findSkin, findTheme, realMoneyPrice, SKINS, THEMES, type SkinColors } from "./cosmetics";
 import { clearSave, loadSave, persistSave } from "./save";
 import { ChunkManager } from "./world";
 import { gameAudio } from "./audio";
@@ -669,7 +669,7 @@ export default function FoodRunGame() {
     syncUi(g);
   }, [syncUi]);
 
-  const buyCosmetic = useCallback((type: "skin" | "theme", id: string) => {
+  const buyCosmetic = useCallback((type: "skin" | "theme", id: string, currency: "tokens" | "money" = "tokens") => {
     const g = runtimeRef.current;
     if (!g) return;
     const item = type === "skin" ? SKINS.find((skin) => skin.id === id) : THEMES.find((theme) => theme.id === id);
@@ -681,8 +681,14 @@ export default function FoodRunGame() {
       syncUi(g);
       return;
     }
+    if (currency === "money") {
+      const price = realMoneyPrice(item.cost);
+      showNotice(g, `${price} — payment processing coming soon. (Or grind ${item.cost} Reef Tokens)`, 3);
+      return;
+    }
     if (g.save.reefTokens < item.cost) {
-      showNotice(g, `Need ${item.cost - g.save.reefTokens} more Reef Tokens for ${item.name}.`, 2.2);
+      const priceUSD = realMoneyPrice(item.cost);
+      showNotice(g, `Need ${item.cost - g.save.reefTokens} Reef Tokens (or pay ${priceUSD})`, 2.2);
       syncUi(g);
       return;
     }
@@ -2095,12 +2101,20 @@ export default function FoodRunGame() {
                 {SKINS.map((skin) => {
                   const owned = ui.save.ownedSkins.includes(skin.id);
                   const active = ui.save.activeSkin === skin.id;
+                  const moneyPrice = realMoneyPrice(skin.cost);
                   return (
-                    <button key={skin.id} className={`store-item rarity-${skin.rarity} ${active ? "active" : ""}`} onClick={() => buyCosmetic("skin", skin.id)} disabled={active}>
-                      <b>{skin.name}</b>
-                      <small>{skin.rarity.toUpperCase()}</small>
-                      <em>{active ? "EQUIPPED" : owned ? "EQUIP" : `🪸 ${skin.cost}`}</em>
-                    </button>
+                    <div key={skin.id} className="store-item-group">
+                      <button className={`store-item rarity-${skin.rarity} ${active ? "active" : ""}`} onClick={() => buyCosmetic("skin", skin.id)} disabled={active}>
+                        <b>{skin.name}</b>
+                        <small>{skin.rarity.toUpperCase()}</small>
+                        <em>{active ? "EQUIPPED" : owned ? "EQUIP" : `🪸 ${skin.cost}`}</em>
+                      </button>
+                      {!active && !owned && skin.cost > 0 && (
+                        <button className="store-item-money" onClick={() => buyCosmetic("skin", skin.id, "money")} title={`Pay ${moneyPrice} to unlock instantly`}>
+                          {moneyPrice}
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -2111,12 +2125,20 @@ export default function FoodRunGame() {
                 {THEMES.map((theme) => {
                   const owned = ui.save.ownedThemes.includes(theme.id);
                   const active = ui.save.activeTheme === theme.id;
+                  const moneyPrice = realMoneyPrice(theme.cost);
                   return (
-                    <button key={theme.id} className={`store-item rarity-${theme.rarity} ${active ? "active" : ""}`} onClick={() => buyCosmetic("theme", theme.id)} disabled={active}>
-                      <b>{theme.name}</b>
-                      <small>{theme.rarity.toUpperCase()}</small>
-                      <em>{active ? "EQUIPPED" : owned ? "EQUIP" : `🪸 ${theme.cost}`}</em>
-                    </button>
+                    <div key={theme.id} className="store-item-group">
+                      <button className={`store-item rarity-${theme.rarity} ${active ? "active" : ""}`} onClick={() => buyCosmetic("theme", theme.id)} disabled={active}>
+                        <b>{theme.name}</b>
+                        <small>{theme.rarity.toUpperCase()}</small>
+                        <em>{active ? "EQUIPPED" : owned ? "EQUIP" : `🪸 ${theme.cost}`}</em>
+                      </button>
+                      {!active && !owned && theme.cost > 0 && (
+                        <button className="store-item-money" onClick={() => buyCosmetic("theme", theme.id, "money")} title={`Pay ${moneyPrice} to unlock instantly`}>
+                          {moneyPrice}
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>

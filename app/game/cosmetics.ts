@@ -52,3 +52,10 @@ export const THEMES: ThemeDef[] = [
 
 export const findSkin = (id: string) => SKINS.find((skin) => skin.id === id) ?? SKINS[0];
 export const findTheme = (id: string) => THEMES.find((theme) => theme.id === id) ?? THEMES[0];
+
+/** Reef Tokens to USD: 50 tokens = $1.00, capped at $2.99 per cosmetic. */
+export const realMoneyPrice = (reefTokenCost: number): string => {
+  if (reefTokenCost <= 0) return "Free";
+  const price = Math.min(reefTokenCost / 50, 2.99);
+  return `$${price.toFixed(2)}`;
+};

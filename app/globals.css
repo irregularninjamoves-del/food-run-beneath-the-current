@@ -132,10 +132,13 @@ kbd { display: inline-grid; place-items: center; min-width: 28px; height: 25px; 
 .stat-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 10px; }.stat-rows span { display: flex; flex-direction: column; color: #86adb4; font: 600 .58rem var(--font-mono), monospace; letter-spacing: .04em; }.stat-rows b { margin-top: 2px; color: #e8fbf4; font-size: .78rem; }
 .achievement-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }.achievement-rows span { color: #7fa9ad; font: 600 .64rem var(--font-mono), monospace; }.achievement-rows span.on { color: var(--gold); }
 .store-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin-top: 8px; }
-.store-item { display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; cursor: pointer; text-align: left; color: #dcefeb; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09); border-left-width: 3px; border-radius: 6px; }
+.store-item-group { display: flex; gap: 4px; align-items: stretch; }
+.store-item { display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; cursor: pointer; text-align: left; color: #dcefeb; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.09); border-left-width: 3px; border-radius: 6px; flex: 1; }
 .store-item b { font-size: .72rem; color: #f0fff8; }.store-item small { font-size: .54rem; letter-spacing: .1em; color: #83aeb3; }.store-item em { margin-top: 3px; color: var(--gold); font: normal 700 .6rem var(--font-mono), monospace; }
 .store-item.active { border-color: rgba(121,244,197,.55); background: rgba(121,244,197,.08); cursor: default; }.store-item.active em { color: var(--mint); }
 .store-item:disabled { opacity: 1; }
+.store-item-money { padding: 0 7px; border: 1px solid rgba(255,130,60,.45); border-radius: 5px; background: rgba(255,90,40,.15); color: #ffaa66; font: 700 .58rem var(--font-mono), monospace; cursor: pointer; transition: all 90ms ease; white-space: nowrap; }
+.store-item-money:hover { background: rgba(255,90,40,.3); border-color: rgba(255,130,60,.75); color: #ffc090; }
 .rarity-common { border-left-color: #9fb9c9; }.rarity-uncommon { border-left-color: #57d98a; }.rarity-rare { border-left-color: #57a8ff; }.rarity-epic { border-left-color: #c06bff; }.rarity-legendary { border-left-color: #ffb03a; }
 .token-line { margin: -6px 0 20px; color: #9fd8cd; font: 700 .66rem var(--font-mono), monospace; letter-spacing: .06em; }
 .boost-active { margin-top: 8px; padding: 6px 10px; color: var(--gold); border: 1px solid rgba(255,214,110,.35); border-radius: 5px; font: 700 .62rem var(--font-mono), monospace; letter-spacing: .06em; }
